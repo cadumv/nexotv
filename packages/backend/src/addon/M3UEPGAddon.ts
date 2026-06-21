@@ -7,6 +7,7 @@ import env from '../config/env';
 import * as xtreamProvider from '../providers/xtreamProvider';
 import * as iptvOrgProvider from '../providers/iptvOrgProvider';
 import * as m3uProvider from '../providers/m3uProvider';
+import { normalizeTitle, resolveImdbTitle, resolveTmdbTitles } from '../utils/titleMatch';
 
 const CACHE_ENABLED = env.CACHE_ENABLED;
 const CACHE_TTL_MS = env.CACHE_TTL_MS;
@@ -32,6 +33,7 @@ export interface AddonConfig {
     m3uUrl?: string;
     epgUrl?: string;
     enableEpg?: boolean;
+    enableVod?: boolean;
     epgOffsetHours?: number | string;
     reformatLogos?: boolean;
     iptvOrgCountry?: string;
@@ -87,6 +89,16 @@ export class M3UEPGAddon {
     updateInterval: number;
     channels: any[];
     channelMap: Map<string, any>;
+    movies: any[];
+    movieMap: Map<string, any>;
+    series: any[];
+    seriesMap: Map<string, any>;
+    movieTitleIndex: Map<string, any>;
+    movieTitleYearIndex: Map<string, any>;
+    seriesTitleIndex: Map<string, any>;
+    seriesTitleYearIndex: Map<string, any>;
+    seriesInfoCache: Map<string, { data: any; ts: number }>;
+    vodInfoCache: Map<string, { data: any; ts: number }>;
     epgData: Record<string, any[]>;
     lastUpdate: number;
     m3uEtag: string | null;
@@ -115,6 +127,16 @@ export class M3UEPGAddon {
         this.updateInterval = env.UPDATE_INTERVAL_MS;
         this.channels = [];
         this.channelMap = new Map();
+        this.movies = [];
+        this.movieMap = new Map();
+        this.series = [];
+        this.seriesMap = new Map();
+        this.movieTitleIndex = new Map();
+        this.movieTitleYearIndex = new Map();
+        this.seriesTitleIndex = new Map();
+        this.seriesTitleYearIndex = new Map();
+        this.seriesInfoCache = new Map();
+        this.vodInfoCache = new Map();
         this.epgData = {};
         this.lastUpdate = 0;
         this.m3uEtag = null;
@@ -158,6 +180,8 @@ export class M3UEPGAddon {
         if (!CACHE_ENABLED) return;
         sqliteCache.setRaw('addon:channels:' + this.cacheKey, {
             channels: this.channels,
+            movies: this.movies,
+            series: this.series,
             lastUpdate: this.lastUpdate,
             m3uEtag: this.m3uEtag ?? null,
             m3uLastModified: this.m3uLastModified ?? null,
@@ -174,6 +198,11 @@ export class M3UEPGAddon {
         if (cached) {
             this.channels = cached.channels || [];
             this.channelMap = new Map(this.channels.map(c => [c.id, c]));
+            this.movies = cached.movies || [];
+            this.movieMap = new Map(this.movies.map((m: any) => [m.id, m]));
+            this.series = cached.series || [];
+            this.seriesMap = new Map(this.series.map((s: any) => [s.id, s]));
+            this.buildTitleIndexes();
             this.lastUpdate = cached.lastUpdate || 0;
             this.m3uEtag = cached.m3uEtag ?? null;
             this.m3uLastModified = cached.m3uLastModified ?? null;
@@ -226,7 +255,25 @@ export class M3UEPGAddon {
                 genreExtra.options = groups;
             }
         }
-        this.log.debug('Catalog genres built', { tvGenres: tvCatalog?.genres?.length || 0 });
+
+        const setCatalogGenres = (catalogId: string, items: any[]) => {
+            const cat = this.manifestRef.catalogs.find((c: any) => c.id === catalogId);
+            if (!cat) return;
+            const groups = [
+                ...new Set(items.map((i: any) => i.category).filter(Boolean).map((s: string) => s.trim()))
+            ].sort((a: any, b: any) => a.localeCompare(b));
+            cat.genres = groups;
+            const genreExtra = cat.extra?.find((e: any) => e.name === 'genre');
+            if (genreExtra) genreExtra.options = groups;
+        };
+        setCatalogGenres('nexotv_vod', this.movies || []);
+        setCatalogGenres('nexotv_series', this.series || []);
+
+        this.log.debug('Catalog genres built', {
+            tvGenres: tvCatalog?.genres?.length || 0,
+            movies: this.movies?.length || 0,
+            series: this.series?.length || 0,
+        });
     }
 
     async updateData(force = false) {
@@ -248,6 +295,9 @@ export class M3UEPGAddon {
             const epgUpdateTimeBefore = this.lastEpgUpdate;
             await providerModule.fetchData(this);
             this.channelMap = new Map(this.channels.map(c => [c.id, c]));
+            this.movieMap = new Map((this.movies || []).map(m => [m.id, m]));
+            this.seriesMap = new Map((this.series || []).map(s => [s.id, s]));
+            this.buildTitleIndexes();
             this.lastUpdate = Date.now();
             if (CACHE_ENABLED && this.channels.length > 0) {
                 await this.saveChannelsToCache();
@@ -360,8 +410,299 @@ export class M3UEPGAddon {
         };
     }
 
+    // ---------- VOD (movies) & Series ----------
+
+    private _posterOrPlaceholder(url: string | undefined, name: string) {
+        if (url && url.trim()) return url;
+        return `https://placehold.co/250x375/2b2b2b/FFFFFF.png?text=${encodeURIComponent(name || 'VOD')}`;
+    }
+
+    generateMoviePreview(m: any) {
+        return {
+            id: m.id,
+            type: 'movie',
+            name: m.name,
+            poster: this._posterOrPlaceholder(m.poster, m.name),
+            posterShape: 'poster',
+            releaseInfo: m.year || undefined,
+            imdbRating: m.rating || undefined,
+            genres: m.category ? [m.category] : undefined,
+        };
+    }
+
+    generateSeriesPreview(s: any) {
+        return {
+            id: s.id,
+            type: 'series',
+            name: s.name,
+            poster: this._posterOrPlaceholder(s.poster, s.name),
+            posterShape: 'poster',
+            releaseInfo: s.year || undefined,
+            imdbRating: s.rating || undefined,
+            genres: s.category ? [s.category] : undefined,
+        };
+    }
+
+    async getMoviesForCatalog() {
+        await this.ensureDataLoaded();
+        return this.movies || [];
+    }
+
+    async getSeriesForCatalog() {
+        await this.ensureDataLoaded();
+        return this.series || [];
+    }
+
+    buildTitleIndexes() {
+        this.movieTitleIndex = new Map();
+        this.movieTitleYearIndex = new Map();
+        this.seriesTitleIndex = new Map();
+        this.seriesTitleYearIndex = new Map();
+        for (const m of this.movies || []) {
+            const key = normalizeTitle(m.name);
+            if (!key) continue;
+            if (!this.movieTitleIndex.has(key)) this.movieTitleIndex.set(key, m);
+            const y = m.year ? String(m.year).slice(0, 4) : null;
+            if (y) {
+                const yk = `${key}|${y}`;
+                if (!this.movieTitleYearIndex.has(yk)) this.movieTitleYearIndex.set(yk, m);
+            }
+        }
+        for (const s of this.series || []) {
+            const key = normalizeTitle(s.name);
+            if (!key) continue;
+            if (!this.seriesTitleIndex.has(key)) this.seriesTitleIndex.set(key, s);
+            const y = s.year ? String(s.year).slice(0, 4) : null;
+            if (y) {
+                const yk = `${key}|${y}`;
+                if (!this.seriesTitleYearIndex.has(yk)) this.seriesTitleYearIndex.set(yk, s);
+            }
+        }
+    }
+
+    private _lookupByTitle(
+        byTitle: Map<string, any>,
+        byTitleYear: Map<string, any>,
+        items: any[],
+        name: string,
+        year: string | null,
+    ) {
+        const key = normalizeTitle(name);
+        if (!key) return null;
+
+        // 1) Exact title + year (±1 for release-date drift between sources)
+        if (year) {
+            for (const y of [year, String(Number(year) + 1), String(Number(year) - 1)]) {
+                const hit = byTitleYear.get(`${key}|${y}`);
+                if (hit) return hit;
+            }
+        }
+        // 2) Exact title
+        const exact = byTitle.get(key);
+        if (exact) return exact;
+
+        // 3) Fuzzy: IPTV title often carries a subtitle ("Breaking Bad: A Química…").
+        //    Accept when one normalized title is a word-boundary prefix of the other.
+        //    Prefer a year match; otherwise the closest (shortest) candidate.
+        let best: any = null;
+        let bestLen = Infinity;
+        let bestYearMatch = false;
+        for (const it of items) {
+            const t = normalizeTitle(it.name);
+            if (!t) continue;
+            const isPrefix = t === key || t.startsWith(key + ' ') || key.startsWith(t + ' ');
+            if (!isPrefix) continue;
+            const ym = !!(year && it.year && String(it.year).slice(0, 4) === year);
+            // Prefer year matches; among those (or among non-matches) prefer shortest title.
+            if (ym && !bestYearMatch) { best = it; bestLen = t.length; bestYearMatch = true; continue; }
+            if (ym === bestYearMatch && t.length < bestLen) { best = it; bestLen = t.length; }
+        }
+        return best;
+    }
+
+    async getSeriesInfoCached(id: string, seriesId: string | number) {
+        const cached = this.seriesInfoCache.get(id);
+        if (cached && Date.now() - cached.ts < this.cacheTtl) return cached.data;
+        const data = await xtreamProvider.fetchSeriesInfo(this.config, seriesId);
+        if (data) this.seriesInfoCache.set(id, { data, ts: Date.now() });
+        return data;
+    }
+
+    /** Build ordered name+year candidates for an IMDB id: TMDB (pt-BR + original) then Cinemeta. */
+    private async _imdbTitleCandidates(type: 'movie' | 'series', ttId: string) {
+        const out: { name: string; year: string | null }[] = [];
+        const apiKey = (env as any).TMDB_API_KEY;
+        if (apiKey) {
+            const tmdb = await resolveTmdbTitles(type, ttId, apiKey);
+            if (tmdb) for (const n of tmdb.names) out.push({ name: n, year: tmdb.year });
+        }
+        const cine = await resolveImdbTitle(type, ttId);
+        if (cine?.name) out.push({ name: cine.name, year: cine.year });
+        return out;
+    }
+
+    /** Resolve an IMDB movie id (tt…) to an IPTV stream by title+year. */
+    async getMovieStreamsByImdb(ttId: string) {
+        const candidates = await this._imdbTitleCandidates('movie', ttId);
+        let m: any = null;
+        for (const c of candidates) {
+            m = this._lookupByTitle(this.movieTitleIndex, this.movieTitleYearIndex, this.movies || [], c.name, c.year);
+            if (m) break;
+        }
+        if (!m) return [];
+        const { xtreamUrl, xtreamUsername, xtreamPassword } = this.config as any;
+        const url = `${xtreamUrl}/movie/${xtreamUsername}/${xtreamPassword}/${m.streamId}.${m.ext || 'mp4'}`;
+        return [{
+            url,
+            title: `📺 IPTV${m.year ? ` (${m.year})` : ''}`,
+            behaviorHints: { bingeGroup: `nexotv-vod-${this.idPrefix}` },
+        }];
+    }
+
+    /** Resolve an IMDB series episode (tt…:S:E) to an IPTV stream by title+year. */
+    async getSeriesStreamsByImdb(ttId: string, season: number, episode: number) {
+        const candidates = await this._imdbTitleCandidates('series', ttId);
+        let s: any = null;
+        for (const c of candidates) {
+            s = this._lookupByTitle(this.seriesTitleIndex, this.seriesTitleYearIndex, this.series || [], c.name, c.year);
+            if (s) break;
+        }
+        if (!s) return [];
+        const data = await this.getSeriesInfoCached(s.id, s.seriesId);
+        const eps = data?.episodes?.[String(season)] || [];
+        const ep = eps.find((e: any) => Number(e.episode_num) === episode);
+        if (!ep) return [];
+        const ext = (ep.container_extension || 'mp4').replace(/^\./, '');
+        const { xtreamUrl, xtreamUsername, xtreamPassword } = this.config as any;
+        const url = `${xtreamUrl}/series/${xtreamUsername}/${xtreamPassword}/${ep.id}.${ext}`;
+        return [{
+            url,
+            title: `📺 IPTV — S${season}E${episode}`,
+            behaviorHints: { bingeGroup: `nexotv-series-${this.idPrefix}` },
+        }];
+    }
+
+    async getMovieMeta(id: string) {
+        const m = this.movieMap.get(id);
+        if (!m) return null;
+        let info: any = null;
+        const cached = this.vodInfoCache.get(id);
+        if (cached && Date.now() - cached.ts < this.cacheTtl) {
+            info = cached.data;
+        } else {
+            info = await xtreamProvider.fetchVodInfo(this.config, m.streamId);
+            if (info) this.vodInfoCache.set(id, { data: info, ts: Date.now() });
+        }
+        const cast = info?.cast ? String(info.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined;
+        const backdrop = Array.isArray(info?.backdrop_path) ? info.backdrop_path[0] : undefined;
+        return {
+            id: m.id,
+            type: 'movie',
+            name: m.name,
+            poster: this._posterOrPlaceholder(m.poster, m.name),
+            posterShape: 'poster',
+            background: backdrop || m.poster,
+            description: info?.plot || info?.description || '',
+            releaseInfo: m.year || info?.releasedate || undefined,
+            imdbRating: m.rating || info?.rating || undefined,
+            genres: m.category ? [m.category] : (info?.genre ? [info.genre] : undefined),
+            runtime: info?.duration || undefined,
+            cast,
+            director: info?.director || undefined,
+        };
+    }
+
+    async getSeriesMeta(id: string) {
+        const s = this.seriesMap.get(id);
+        if (!s) return null;
+        const data = await this.getSeriesInfoCached(id, s.seriesId);
+        const videos: any[] = [];
+        if (data?.episodes) {
+            for (const seasonNum of Object.keys(data.episodes)) {
+                const eps = data.episodes[seasonNum] || [];
+                for (const ep of eps) {
+                    const ext = (ep.container_extension || 'mp4').replace(/^\./, '');
+                    const seasN = Number(seasonNum) || 1;
+                    const epNum = Number(ep.episode_num) || (videos.length + 1);
+                    let released: string | undefined;
+                    if (ep.info?.releasedate) released = ep.info.releasedate;
+                    else if (ep.added) {
+                        const t = Number(ep.added);
+                        if (isFinite(t) && t > 0) released = new Date(t * 1000).toISOString();
+                    }
+                    videos.push({
+                        id: `epi${this.idPrefix}_${ep.id}__${ext}`,
+                        title: ep.title || `S${seasN}E${epNum}`,
+                        season: seasN,
+                        episode: epNum,
+                        thumbnail: ep.info?.movie_image || ep.info?.cover_big || s.poster || undefined,
+                        overview: ep.info?.plot || ep.info?.overview || undefined,
+                        released,
+                    });
+                }
+            }
+        }
+        videos.sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
+        const backdrop = Array.isArray(data?.info?.backdrop_path) ? data.info.backdrop_path[0] : undefined;
+        return {
+            id: s.id,
+            type: 'series',
+            name: s.name,
+            poster: this._posterOrPlaceholder(s.poster, s.name),
+            posterShape: 'poster',
+            background: backdrop || s.poster,
+            description: s.plot || data?.info?.plot || '',
+            releaseInfo: s.year || undefined,
+            imdbRating: s.rating || data?.info?.rating || undefined,
+            genres: s.category ? [s.category] : (s.genre ? [s.genre] : undefined),
+            cast: s.cast ? String(s.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
+            director: s.director || undefined,
+            videos,
+        };
+    }
+
+    getMovieStreams(id: string) {
+        const m = this.movieMap.get(id);
+        if (!m) return [];
+        const { xtreamUrl, xtreamUsername, xtreamPassword } = this.config as any;
+        const url = `${xtreamUrl}/movie/${xtreamUsername}/${xtreamPassword}/${m.streamId}.${m.ext || 'mp4'}`;
+        // No notWebReady: let the native player (desktop libmpv / Fire TV ExoPlayer) play
+        // the file directly so AC3/E-AC3 (Dolby) audio is decoded natively. Routing VOD
+        // through Stremio's streaming server tends to drop AC3 audio.
+        return [{
+            url,
+            title: `${m.name}${m.year ? ` (${m.year})` : ''}`,
+            behaviorHints: { bingeGroup: `nexotv-vod-${this.idPrefix}` },
+        }];
+    }
+
+    getEpisodeStreams(id: string) {
+        const prefix = `epi${this.idPrefix}_`;
+        const rest = id.slice(prefix.length);
+        const sep = rest.lastIndexOf('__');
+        const episodeId = sep >= 0 ? rest.slice(0, sep) : rest;
+        const ext = sep >= 0 ? rest.slice(sep + 2) : 'mp4';
+        const { xtreamUrl, xtreamUsername, xtreamPassword } = this.config as any;
+        const url = `${xtreamUrl}/series/${xtreamUsername}/${xtreamPassword}/${episodeId}.${ext}`;
+        // No notWebReady: native player handles direct playback + AC3/Dolby audio.
+        return [{
+            url,
+            title: 'Assistir',
+            behaviorHints: { bingeGroup: `nexotv-series-${this.idPrefix}` },
+        }];
+    }
+
     async getStreams(id: string) {
         await this.ensureDataLoaded();
+        if (id.startsWith('tt')) {
+            const parts = id.split(':');
+            if (parts.length >= 3) {
+                return this.getSeriesStreamsByImdb(parts[0], parseInt(parts[1], 10), parseInt(parts[2], 10));
+            }
+            return this.getMovieStreamsByImdb(parts[0]);
+        }
+        if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieStreams(id);
+        if (id.startsWith(`epi${this.idPrefix}_`)) return this.getEpisodeStreams(id);
         const item = this.channelMap.get(id);
         if (!item) return [];
 
@@ -395,7 +736,11 @@ export class M3UEPGAddon {
     }
 
     async getDetailedMeta(id: string) {
+        // IMDB ids are owned by Cinemeta — don't provide meta, only streams.
+        if (id.startsWith('tt')) return null;
         await this.ensureDataLoaded();
+        if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieMeta(id);
+        if (id.startsWith(`ser${this.idPrefix}_`)) return this.getSeriesMeta(id);
         await this.ensureEpgLoaded();
         const item = this.channelMap.get(id);
         if (!item) return null;
@@ -467,6 +812,10 @@ export class M3UEPGAddon {
         this._evictTimer = null;
         this.channels = [];
         this.channelMap = new Map();
+        this.movies = [];
+        this.movieMap = new Map();
+        this.series = [];
+        this.seriesMap = new Map();
         this.epgData = {};
         this.log.debug('Data evicted from RAM', { cacheKey: this.cacheKey });
     }

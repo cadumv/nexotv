@@ -49,10 +49,23 @@ async function createAddon(config: AddonConfig) {
             const start = Date.now();
             try {
                 await addonInstance.refreshOnFirstCatalogRequest();
-                const catalogIds = ['iptv_channels', 'iptv_org'];
-                const channels = await addonInstance.getChannelsForCatalog();
-                let items = args.type === 'tv' && catalogIds.includes(args.id) ? channels : [];
                 const extra = args.extra || {};
+
+                let items: any[] = [];
+                let toMeta: (i: any) => any;
+                if (args.type === 'movie' && args.id === 'nexotv_vod') {
+                    items = await addonInstance.getMoviesForCatalog();
+                    toMeta = (i: any) => addonInstance.generateMoviePreview(i);
+                } else if (args.type === 'series' && args.id === 'nexotv_series') {
+                    items = await addonInstance.getSeriesForCatalog();
+                    toMeta = (i: any) => addonInstance.generateSeriesPreview(i);
+                } else if (args.type === 'tv' && ['iptv_channels', 'iptv_org'].includes(args.id)) {
+                    items = await addonInstance.getChannelsForCatalog();
+                    toMeta = (i: any) => addonInstance.generateMetaPreview(i);
+                } else {
+                    return { metas: [] };
+                }
+
                 if (extra.genre && extra.genre !== 'All Channels') {
                     items = items.filter((i: any) =>
                         (i.category && i.category === extra.genre) ||
@@ -61,11 +74,11 @@ async function createAddon(config: AddonConfig) {
                 }
                 if (extra.search) {
                     const q = extra.search.toLowerCase();
-                    items = items.filter((i: any) => i.name.toLowerCase().includes(q));
+                    items = items.filter((i: any) => (i.name || '').toLowerCase().includes(q));
                 }
                 const PAGE_SIZE = env.CATALOG_PAGE_SIZE;
                 const skip = parseInt(extra.skip || '0', 10) || 0;
-                const metas = items.slice(skip, skip + PAGE_SIZE).map((i: any) => addonInstance.generateMetaPreview(i));
+                const metas = items.slice(skip, skip + PAGE_SIZE).map(toMeta);
                 if (env.DEBUG) {
                     console.log('[DEBUG] Catalog handler', {
                         type: args.type,

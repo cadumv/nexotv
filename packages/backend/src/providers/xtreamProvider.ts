@@ -79,6 +79,79 @@ export async function fetchData(addonInstance: any) {
         };
     });
 
+    // ---- VOD (movies) + Series ----
+    // Best-effort: failures here must NOT break live channels.
+    if (config.enableVod !== false) {
+        try {
+            const [vodResp, vodCatsResp, seriesResp, seriesCatsResp] = await Promise.all([
+                withTimeout(`${base}&action=get_vod_streams`, {}, env.FETCH_TIMEOUT_MS).catch(() => null),
+                withTimeout(`${base}&action=get_vod_categories`, {}, env.FETCH_TIMEOUT_MS).catch(() => null),
+                withTimeout(`${base}&action=get_series`, {}, env.FETCH_TIMEOUT_MS).catch(() => null),
+                withTimeout(`${base}&action=get_series_categories`, {}, env.FETCH_TIMEOUT_MS).catch(() => null),
+            ]);
+
+            const readCatMap = async (resp: any): Promise<Record<string, string>> => {
+                const map: Record<string, string> = {};
+                try {
+                    if (resp && resp.ok) {
+                        const arr = await resp.json();
+                        if (Array.isArray(arr)) {
+                            for (const c of arr) {
+                                if (c && c.category_id && c.category_name) map[c.category_id] = c.category_name;
+                            }
+                        }
+                    }
+                } catch { /* ignore */ }
+                return map;
+            };
+
+            const vodCatMap = await readCatMap(vodCatsResp);
+            const seriesCatMap = await readCatMap(seriesCatsResp);
+
+            if (vodResp && vodResp.ok) {
+                const vod = await vodResp.json();
+                addonInstance.movies = (Array.isArray(vod) ? vod : []).map((m: any) => ({
+                    id: `vod${addonInstance.idPrefix}_${m.stream_id}`,
+                    streamId: m.stream_id,
+                    type: 'movie',
+                    name: m.name || m.title,
+                    poster: m.stream_icon,
+                    year: m.year,
+                    rating: m.rating,
+                    category: vodCatMap[m.category_id] || m.category_name || 'Filmes',
+                    ext: (m.container_extension || 'mp4').replace(/^\./, ''),
+                    added: m.added,
+                }));
+            }
+
+            if (seriesResp && seriesResp.ok) {
+                const series = await seriesResp.json();
+                addonInstance.series = (Array.isArray(series) ? series : []).map((s: any) => ({
+                    id: `ser${addonInstance.idPrefix}_${s.series_id}`,
+                    seriesId: s.series_id,
+                    type: 'series',
+                    name: s.name || s.title,
+                    poster: s.cover,
+                    year: s.year,
+                    plot: s.plot,
+                    genre: s.genre,
+                    cast: s.cast,
+                    director: s.director,
+                    rating: s.rating,
+                    category: seriesCatMap[s.category_id] || s.category_name || 'Séries',
+                    lastModified: s.last_modified,
+                }));
+            }
+
+            addonInstance.log?.debug('VOD/Series fetched', {
+                movies: addonInstance.movies?.length || 0,
+                series: addonInstance.series?.length || 0,
+            });
+        } catch (e: any) {
+            addonInstance.log?.warn('[XTREAM] VOD/Series fetch failed (live unaffected):', e?.message);
+        }
+    }
+
     if (config.enableEpg) {
         const customEpgUrl = config.epgUrl && typeof config.epgUrl === 'string' && config.epgUrl.trim() ? config.epgUrl.trim() : null;
         const epgSource = customEpgUrl
@@ -112,5 +185,48 @@ export async function fetchData(addonInstance: any) {
                 ms: now - (addonInstance.lastEpgUpdate ?? 0)
             });
         }
+    }
+}
+
+function buildBase(config: any) {
+    const { xtreamUrl, xtreamUsername, xtreamPassword } = config;
+    return `${xtreamUrl}/player_api.php?username=${encodeURIComponent(xtreamUsername)}&password=${encodeURIComponent(xtreamPassword)}`;
+}
+
+/**
+ * Fetch detailed VOD info (plot, genre, cast, duration) for a single movie.
+ * Returns the raw `info` object or null.
+ */
+export async function fetchVodInfo(config: any, streamId: string | number) {
+    try {
+        await validatePublicUrl(config.xtreamUrl);
+        const url = `${buildBase(config)}&action=get_vod_info&vod_id=${encodeURIComponent(String(streamId))}`;
+        const resp = await withTimeout(url, {}, env.FETCH_TIMEOUT_MS);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data?.info || data?.movie_data || null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Fetch series info (seasons + episodes) for a single series.
+ * Returns { info, episodes } where episodes is keyed by season number.
+ */
+export async function fetchSeriesInfo(config: any, seriesId: string | number) {
+    try {
+        await validatePublicUrl(config.xtreamUrl);
+        const url = `${buildBase(config)}&action=get_series_info&series_id=${encodeURIComponent(String(seriesId))}`;
+        const resp = await withTimeout(url, {}, env.FETCH_TIMEOUT_MS);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return {
+            info: data?.info || {},
+            seasons: Array.isArray(data?.seasons) ? data.seasons : [],
+            episodes: data?.episodes || {},
+        };
+    } catch {
+        return null;
     }
 }

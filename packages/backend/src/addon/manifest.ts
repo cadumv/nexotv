@@ -7,7 +7,7 @@ export function createManifest(idPrefix?: string, catalogName?: string) {
         name: env.ADDON_NAME,
         description: env.ADDON_DESCRIPTION,
         resources: ['catalog', 'stream', 'meta'],
-        types: ['tv'],
+        types: ['tv', 'movie', 'series'],
         catalogs: [
             {
                 type: 'tv',
@@ -19,9 +19,35 @@ export function createManifest(idPrefix?: string, catalogName?: string) {
                     { name: 'skip' }
                 ],
                 genres: []
+            },
+            {
+                type: 'movie',
+                id: 'nexotv_vod',
+                name: catalogName ? `${catalogName} Filmes` : 'Filmes',
+                extra: [
+                    { name: 'genre', isRequired: false, options: [] },
+                    { name: 'search', isRequired: false },
+                    { name: 'skip' }
+                ],
+                genres: []
+            },
+            {
+                type: 'series',
+                id: 'nexotv_series',
+                name: catalogName ? `${catalogName} Séries` : 'Séries',
+                extra: [
+                    { name: 'genre', isRequired: false, options: [] },
+                    { name: 'search', isRequired: false },
+                    { name: 'skip' }
+                ],
+                genres: []
             }
         ],
-        idPrefixes: idPrefix ? [`xc${idPrefix}_`, `io${idPrefix}_`, `m3${idPrefix}_`] : ['xc', 'io', 'm3'],
+        // 'tt' lets Stremio route IMDB stream requests (from Cinemeta home/search)
+        // to us, so IPTV shows up as a source on the standard movie/series pages.
+        idPrefixes: idPrefix
+            ? ['tt', `xc${idPrefix}_`, `vod${idPrefix}_`, `ser${idPrefix}_`, `epi${idPrefix}_`, `io${idPrefix}_`, `m3${idPrefix}_`]
+            : ['tt', 'xc', 'vod', 'ser', 'epi', 'io', 'm3'],
         behaviorHints: {
             configurable: true,
             configurationRequired: true

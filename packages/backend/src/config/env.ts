@@ -30,6 +30,8 @@ const env = {
     ADDON_BACKGROUND_URL: process.env.ADDON_BACKGROUND_URL || 'https://raw.githubusercontent.com/joaosavi/nexotv/refs/heads/main/packages/frontend/public/assets/background.png',
     LOGO_CACHE_ENABLED: (process.env.LOGO_CACHE_ENABLED || 'true').toLowerCase() !== 'false',
     CONFIG_SECRET: process.env.CONFIG_SECRET || null,
+    // TMDB API key (v3) — enables matching translated (pt-BR) titles for IMDB integration.
+    TMDB_API_KEY: process.env.TMDB_API_KEY || null,
     IP_RATE_LIMIT_ENABLED: (process.env.IP_RATE_LIMIT_ENABLED || 'true').toLowerCase() !== 'false',
     IP_RATE_LIMIT_WINDOW_MS: parseInt(process.env.IP_RATE_LIMIT_WINDOW_MS || '300000', 10),
     IP_RATE_LIMIT_MAX: parseInt(process.env.IP_RATE_LIMIT_MAX || '300', 10),
