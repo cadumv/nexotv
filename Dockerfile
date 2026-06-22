@@ -5,14 +5,14 @@ WORKDIR /app
 # Build tools for native modules (better-sqlite3)
 RUN apk add --no-cache python3 build-base
 
-# Install pnpm
-RUN npm install -g pnpm@latest
+# Install pnpm 9 (auto-runs native build scripts; no "approve-builds" gate of pnpm 10+)
+RUN npm install -g pnpm@9
 
 # Install ALL workspace deps (backend native modules + frontend Vue toolchain)
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/frontend/package.json ./packages/frontend/
-RUN pnpm install
+RUN pnpm install --no-frozen-lockfile
 
 # Remove build tools after native compilation
 RUN apk del python3 build-base
