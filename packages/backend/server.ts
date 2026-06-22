@@ -10,6 +10,10 @@ import stremioRouter from './src/routes/stremio';
 import * as sqliteCache from './src/utils/sqliteCache';
 import { buildPromiseCache } from './src/addon/M3UEPGAddon';
 import { startWatchdog, getSnapshot } from './src/utils/metrics';
+import { setupOutboundProxy } from './src/utils/outboundProxy';
+
+// Configure the outbound proxy (anti-403) before any provider fetches happen.
+setupOutboundProxy();
 
 const app = express();
 // __dirname in compiled output = packages/backend/dist/

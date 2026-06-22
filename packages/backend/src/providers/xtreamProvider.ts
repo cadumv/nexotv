@@ -6,7 +6,9 @@ async function withTimeout(url: string, options: any, ms: number) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ms);
     try {
-        return await fetch(url, { ...options, signal: controller.signal });
+        // Anti-403: present a player User-Agent (overridable per-request).
+        const headers = { 'User-Agent': env.XTREAM_USER_AGENT, ...(options?.headers || {}) };
+        return await fetch(url, { ...options, headers, signal: controller.signal });
     } finally {
         clearTimeout(timer);
     }

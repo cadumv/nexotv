@@ -32,6 +32,12 @@ const env = {
     CONFIG_SECRET: process.env.CONFIG_SECRET || null,
     // TMDB API key (v3) — enables matching translated (pt-BR) titles for IMDB integration.
     TMDB_API_KEY: process.env.TMDB_API_KEY || null,
+    // Anti-403: User-Agent for Xtream API requests (some panels reject non-player UAs).
+    XTREAM_USER_AGENT: process.env.XTREAM_USER_AGENT || 'VLC/3.0.20 LibVLC/3.0.20',
+    // Anti-403: route outbound IPTV catalog fetches through a clean-IP proxy
+    // (http://user:pass@host:port). Only the low-volume metadata calls use it;
+    // video plays directly from the client. Empty = direct.
+    OUTBOUND_PROXY: process.env.OUTBOUND_PROXY || null,
     IP_RATE_LIMIT_ENABLED: (process.env.IP_RATE_LIMIT_ENABLED || 'true').toLowerCase() !== 'false',
     IP_RATE_LIMIT_WINDOW_MS: parseInt(process.env.IP_RATE_LIMIT_WINDOW_MS || '300000', 10),
     IP_RATE_LIMIT_MAX: parseInt(process.env.IP_RATE_LIMIT_MAX || '300', 10),
