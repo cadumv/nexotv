@@ -34,7 +34,7 @@ export function createManifest(idPrefix?: string, catalogName?: string) {
             {
                 type: 'series',
                 id: 'nexotv_series',
-                name: catalogName ? `${catalogName} Séries` : 'Séries',
+                name: catalogName ? `${catalogName} Series` : 'Series',
                 extra: [
                     { name: 'genre', isRequired: false, options: [] },
                     { name: 'search', isRequired: false },

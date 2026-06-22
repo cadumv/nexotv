@@ -248,11 +248,14 @@ export class M3UEPGAddon {
                 )
             ].sort((a: any, b: any) => a.localeCompare(b));
             if (!groups.includes('All Channels')) groups.unshift('All Channels');
-            tvCatalog.genres = groups;
+            // Accent-stripped for display (Stremio mis-renders UTF-8). The genre
+            // filter in builder.ts compares accent-insensitively so this still works.
+            const dispGroups = groups.map((g: any) => M3UEPGAddon.stripAccents(g));
+            tvCatalog.genres = dispGroups;
 
             const genreExtra = tvCatalog.extra.find((e: any) => e.name === 'genre');
             if (genreExtra) {
-                genreExtra.options = groups;
+                genreExtra.options = dispGroups;
             }
         }
 
@@ -261,7 +264,7 @@ export class M3UEPGAddon {
             if (!cat) return;
             const groups = [
                 ...new Set(items.map((i: any) => i.category).filter(Boolean).map((s: string) => s.trim()))
-            ].sort((a: any, b: any) => a.localeCompare(b));
+            ].sort((a: any, b: any) => a.localeCompare(b)).map((g: any) => M3UEPGAddon.stripAccents(g));
             cat.genres = groups;
             const genreExtra = cat.extra?.find((e: any) => e.name === 'genre');
             if (genreExtra) genreExtra.options = groups;
@@ -269,11 +272,73 @@ export class M3UEPGAddon {
         setCatalogGenres('nexotv_vod', this.movies || []);
         setCatalogGenres('nexotv_series', this.series || []);
 
+        this._appendCategoryCatalogs();
+
         this.log.debug('Catalog genres built', {
             tvGenres: tvCatalog?.genres?.length || 0,
             movies: this.movies?.length || 0,
             series: this.series?.length || 0,
+            totalCatalogs: this.manifestRef?.catalogs?.length || 0,
         });
+    }
+
+    // Encode a provider category name into a URL-safe catalog id suffix (base64url).
+    static encodeCategory(name: string) {
+        return Buffer.from(name, 'utf8').toString('base64')
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    static decodeCategory(b64: string) {
+        let s = b64.replace(/-/g, '+').replace(/_/g, '/');
+        const pad = (4 - (s.length % 4)) % 4;
+        if (pad) s += '='.repeat(pad);
+        return Buffer.from(s, 'base64').toString('utf8');
+    }
+
+    // Stremio's Android/TV client mis-renders UTF-8 accents in catalog names
+    // (e.g. "Séries" shows as "SÃ©ries"). Strip diacritics for the DISPLAY name
+    // only — the catalog id keeps the original category so item filtering still works.
+    static stripAccents(s: string) {
+        return s.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
+    }
+
+    // Expose every provider category as its own Stremio catalog (one row each),
+    // in addition to the three base catalogs. Idempotent: strips previously-added
+    // category catalogs before re-appending so repeated builds don't duplicate.
+    _appendCategoryCatalogs() {
+        if (!this.manifestRef) return;
+        const BASE = new Set(['iptv_channels', 'nexotv_vod', 'nexotv_series']);
+        // The manifest's `catalogs` property is read-only (cannot reassign), so
+        // mutate the array in place: strip previously-added category catalogs.
+        const catalogs = this.manifestRef.catalogs;
+        for (let i = catalogs.length - 1; i >= 0; i--) {
+            if (!BASE.has(catalogs[i].id)) catalogs.splice(i, 1);
+        }
+
+        // name: accent-stripped for display (client mis-renders UTF-8); id keeps
+        // the original category (via encodeCategory) so item filtering still matches.
+        // No 'search' extra here: only the 3 base catalogs are searchable, so a
+        // global search doesn't loop through all ~119 category catalogs.
+        const mk = (type: string, base: string, category: string) => ({
+            type,
+            id: `${base}_g_${M3UEPGAddon.encodeCategory(category)}`,
+            name: M3UEPGAddon.stripAccents(category),
+            extra: [
+                { name: 'skip' }
+            ],
+            genres: []
+        });
+
+        const addCats = (type: string, base: string, items: any[], getCat: (i: any) => string | undefined) => {
+            const cats = [
+                ...new Set(items.map(getCat).filter(Boolean).map((s: any) => s.trim()))
+            ].sort((a: any, b: any) => a.localeCompare(b));
+            for (const c of cats) this.manifestRef.catalogs.push(mk(type, base, c as string));
+        };
+
+        addCats('movie', 'nexotv_vod', this.movies || [], (i: any) => i.category);
+        addCats('series', 'nexotv_series', this.series || [], (i: any) => i.category);
+        addCats('tv', 'iptv_channels', this.channels || [], (c: any) => c.category || c.attributes?.['group-title']);
     }
 
     async updateData(force = false) {
@@ -777,6 +842,9 @@ export class M3UEPGAddon {
     }
 
     _resetEvictTimer() {
+        // Without a persistent backend (nodejs-mobile APK), RAM is the source of
+        // truth — never schedule eviction or the data would be lost permanently.
+        if (!sqliteCache.isAvailable()) return;
         clearTimeout(this._evictTimer);
         this._evictTimer = setTimeout(() => this._evictFromMemory(), env.DATA_MEMORY_TTL_MS);
     }

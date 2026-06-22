@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">NexoTV Server</string>
+    <string name="node_channel_name">NexoTV Server</string>
+    <string name="accessibility_desc">Redireciona buscas do Fire TV para o Stremio (exceto Spotify/YouTube).</string>
+</resources>

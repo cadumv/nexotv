@@ -1,0 +1,17 @@
+# Build output
+build/
+.cxx/
+.gradle/
+*.apk
+local.properties
+
+# Gradle wrapper jar (regenerate with: gradle wrapper)
+gradle/wrapper/gradle-wrapper.jar
+
+# nodejs-mobile native library (download from the v18.20.4 release — see README)
+app/libnode/
+
+# Bundled Node app: install deps + build backend yourself (see README)
+app/src/main/assets/nodejs-project/node_modules/
+app/src/main/assets/nodejs-project/packages/
+app/src/main/assets/nodejs-project/package-lock.json

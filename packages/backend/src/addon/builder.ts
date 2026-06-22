@@ -3,6 +3,7 @@ import { addonBuilder } from 'stremio-addon-sdk';
 import crypto from 'crypto';
 import { createManifest } from './manifest';
 import { M3UEPGAddon, createCacheKey, buildPromiseCache, CACHE_ENABLED } from './M3UEPGAddon';
+import * as sqliteCache from '../utils/sqliteCache';
 import { AddonConfig } from './M3UEPGAddon';
 
 async function createAddon(config: AddonConfig) {
@@ -36,7 +37,9 @@ async function createAddon(config: AddonConfig) {
             console.error('[ADDON] Initial update failed:', e.message);
         }
         addonInstance.buildGenresInManifest();
-        if (CACHE_ENABLED) addonInstance._evictFromMemory();
+        // Only evict if a persistent backend exists to reload from. Without SQLite
+        // (nodejs-mobile APK), RAM is the source of truth — evicting would lose data.
+        if (CACHE_ENABLED && sqliteCache.isAvailable()) addonInstance._evictFromMemory();
 
         let iface: any;
         const _origBuildGenres = addonInstance.buildGenresInManifest.bind(addonInstance);
@@ -51,25 +54,47 @@ async function createAddon(config: AddonConfig) {
                 await addonInstance.refreshOnFirstCatalogRequest();
                 const extra = args.extra || {};
 
+                // A per-category catalog has id "<base>_g_<base64url(category)>".
+                // Resolve it back to its base catalog + the category to filter by.
+                let baseId = args.id;
+                let categoryFilter: string | null = null;
+                for (const base of ['nexotv_vod', 'nexotv_series', 'iptv_channels', 'iptv_org']) {
+                    const pfx = base + '_g_';
+                    if (args.id.startsWith(pfx)) {
+                        baseId = base;
+                        try { categoryFilter = M3UEPGAddon.decodeCategory(args.id.slice(pfx.length)); } catch { categoryFilter = null; }
+                        break;
+                    }
+                }
+
                 let items: any[] = [];
                 let toMeta: (i: any) => any;
-                if (args.type === 'movie' && args.id === 'nexotv_vod') {
+                if (args.type === 'movie' && baseId === 'nexotv_vod') {
                     items = await addonInstance.getMoviesForCatalog();
                     toMeta = (i: any) => addonInstance.generateMoviePreview(i);
-                } else if (args.type === 'series' && args.id === 'nexotv_series') {
+                } else if (args.type === 'series' && baseId === 'nexotv_series') {
                     items = await addonInstance.getSeriesForCatalog();
                     toMeta = (i: any) => addonInstance.generateSeriesPreview(i);
-                } else if (args.type === 'tv' && ['iptv_channels', 'iptv_org'].includes(args.id)) {
+                } else if (args.type === 'tv' && ['iptv_channels', 'iptv_org'].includes(baseId)) {
                     items = await addonInstance.getChannelsForCatalog();
                     toMeta = (i: any) => addonInstance.generateMetaPreview(i);
                 } else {
                     return { metas: [] };
                 }
 
-                if (extra.genre && extra.genre !== 'All Channels') {
+                if (categoryFilter) {
                     items = items.filter((i: any) =>
-                        (i.category && i.category === extra.genre) ||
-                        (i.attributes && i.attributes['group-title'] === extra.genre)
+                        (i.category && i.category === categoryFilter) ||
+                        (i.attributes && i.attributes['group-title'] === categoryFilter)
+                    );
+                }
+
+                if (extra.genre && extra.genre !== 'All Channels') {
+                    // Options are shown accent-stripped, so compare accent-insensitively.
+                    const g = M3UEPGAddon.stripAccents(extra.genre);
+                    items = items.filter((i: any) =>
+                        (i.category && M3UEPGAddon.stripAccents(i.category) === g) ||
+                        (i.attributes && i.attributes['group-title'] && M3UEPGAddon.stripAccents(i.attributes['group-title']) === g)
                     );
                 }
                 if (extra.search) {

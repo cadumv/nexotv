@@ -1,14 +1,32 @@
 import path from 'path';
 import zlib from 'zlib';
-import Database from 'better-sqlite3';
 import { makeLogger } from './logger';
 
 const log = makeLogger();
 
-let db: Database.Database | null = null;
+let db: any = null;
+let DatabaseCtor: any = null;
+let available = false;
+
+// Whether a working persistent SQLite backend is active. When false (e.g. the
+// nodejs-mobile APK build, where the native module is absent), callers must keep
+// data in RAM as the source of truth instead of evicting and reloading.
+export function isAvailable() {
+    return available;
+}
 
 export function init(dbPath: string | null) {
     if (db) return db;
+
+    // better-sqlite3 is a native module. It may be absent (e.g. the nodejs-mobile
+    // APK build, which ships pure-JS only). In that case we run with in-memory
+    // caches only — no crash, no persistence.
+    try {
+        DatabaseCtor = require('better-sqlite3');
+    } catch {
+        log.warn('better-sqlite3 unavailable — running with in-memory cache only (no persistence)');
+        return null;
+    }
 
     const { repoRoot } = require('../config/env');
     const resolvedPath = dbPath || path.resolve(repoRoot, 'data', 'cache.sqlite');
@@ -20,7 +38,7 @@ export function init(dbPath: string | null) {
     }
 
     try {
-        db = new Database(resolvedPath);
+        db = new DatabaseCtor(resolvedPath);
         db.pragma('journal_mode = WAL');
         db.pragma('synchronous = NORMAL');
     } catch {
@@ -31,7 +49,7 @@ export function init(dbPath: string | null) {
         for (const ext of ['', '-shm', '-wal']) {
             try { fs.unlinkSync(resolvedPath + ext); } catch {}
         }
-        db = new Database(':memory:');
+        db = new DatabaseCtor(':memory:');
     }
 
     db.exec(`
@@ -43,6 +61,7 @@ export function init(dbPath: string | null) {
         CREATE INDEX IF NOT EXISTS idx_expires ON CacheEntry(expires_at);
     `);
 
+    available = true;
     log.debug('SQLite cache initialized', { path: resolvedPath });
     return db;
 }

@@ -1,0 +1,68 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "minha telinha",
+      "intents": [
+        {
+          "name": "SearchIntent",
+          "slots": [ { "name": "query", "type": "AMAZON.SearchQuery" } ],
+          "samples": [
+            "procurar {query}",
+            "procura {query}",
+            "buscar {query}",
+            "busca {query}",
+            "pesquisar {query}",
+            "pesquisa {query}",
+            "colocar {query}",
+            "coloca {query}",
+            "botar {query}",
+            "bota {query}",
+            "poe {query}",
+            "põe {query}",
+            "abrir {query}",
+            "abre {query}",
+            "tocar {query}",
+            "toca {query}",
+            "passar {query}",
+            "passa {query}",
+            "ver {query}",
+            "assistir {query}",
+            "achar {query}",
+            "encontrar {query}"
+          ]
+        },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] }
+      ],
+      "types": []
+    },
+    "dialog": {
+      "intents": [
+        {
+          "name": "SearchIntent",
+          "delegationStrategy": "SKILL_RESPONSE",
+          "slots": [
+            {
+              "name": "query",
+              "type": "AMAZON.SearchQuery",
+              "elicitationRequired": true,
+              "confirmationRequired": false,
+              "prompts": { "elicitation": "Elicit.Slot.query" }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "Elicit.Slot.query",
+        "variations": [
+          { "type": "PlainText", "value": "O que você quer procurar?" },
+          { "type": "PlainText", "value": "Qual filme, série ou canal?" }
+        ]
+      }
+    ]
+  }
+}
