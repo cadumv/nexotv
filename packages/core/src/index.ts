@@ -1,7 +1,9 @@
 /**
- * @nexotv/core — ponto de entrada.
- * Ver NEXOTV_APP_ROADMAP.md (Fase 1) para o plano de migração da lógica.
+ * @nexotv/core — ponto de entrada (lógica do app Rajada / backend NexoTV).
+ * Ver NEXOTV_APP_ROADMAP.md (Fase 1) para o plano de migração.
  */
+
+// Rede (trocável)
 export * from './http/HttpClient';
 export { FetchHttpClient } from './http/FetchHttpClient';
 
@@ -13,3 +15,19 @@ export { default as LRUCache } from './utils/lruCache';
 
 // Parsers
 export { parseM3U } from './parsers/m3uParser';
+export {
+    parseEPG, parseEPGTime, getCurrentProgram, getUpcomingPrograms,
+    type ParseEpgOptions,
+} from './parsers/epgParser';
+
+// Metadados (TMDB / Cinemeta)
+export {
+    resolveImdbTitle, resolveTmdbTitles, fetchTmdbMeta,
+    type CineMeta, type TmdbTitles, type TmdbMeta,
+} from './meta/titleMatch';
+
+// Agenda de futebol (Sofascore: relay ou direto)
+export {
+    fetchSofascoreAgenda, BR_FOOTBALL_CHANNELS,
+    type AgendaGame, type AgendaConfig,
+} from './agenda/sofascoreAgenda';

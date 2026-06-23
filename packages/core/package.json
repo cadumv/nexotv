@@ -1,13 +1,21 @@
 {
   "name": "@nexotv/core",
   "version": "0.1.0",
-  "description": "Lógica do NexoTV independente de servidor (roda no backend e no app)",
+  "description": "Lógica do NexoTV/Rajada independente de servidor (roda no backend e no app)",
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "build:check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "xml2js": "0.4.23"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/xml2js": "0.4.14",
+    "typescript": "5.9.3"
   },
   "license": "MIT"
 }

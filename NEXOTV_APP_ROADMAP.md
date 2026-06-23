@@ -83,14 +83,15 @@ o backend pra importar do core é cleanup posterior.
 **Já migrado pro core (compila):**
 - `http/HttpClient` + `FetchHttpClient` (camada de rede trocável)
 - `utils/lruCache` (cache LRU, puro)
-- `parsers/m3uParser` (puro)
+- `parsers/m3uParser` (puro) e `parsers/epgParser` (xml2js, desacoplado de env/logger)
 - `text/normalize` (`stripAccents` manual, `normalizeTitle`, `cleanForSearch`, `compact`)
+- `meta/titleMatch` (TMDB/Cinemeta via `HttpClient`, apiKey por parâmetro)
+- `agenda/sofascoreAgenda` (relay + direto via `HttpClient`)
 
 **Próximo no core:**
-1. `parsers/epgParser` (+ dep `xml2js`, desacoplar de env/logger)
-2. Rede via `HttpClient`: `titleMatch` (TMDB), `sofascoreAgenda` (relay)
-3. `providers/*` (xtream/iptv-org/m3u) recebendo `HttpClient` + config
-4. `addon/M3UEPGAddon` (orquestra tudo) — recebe config + http + storage
+1. `providers/*` (xtream/iptv-org/m3u) recebendo `HttpClient` + config
+2. `addon/M3UEPGAddon` (orquestra tudo) — recebe config + http + storage
+   (a peça grande; muito acoplada a env/sqlite/timers — migrar com cuidado)
 
 ## 📋 A FAZER (fases do app)
 1. **Core** (em andamento): extrair `M3UEPGAddon`/parsers/`titleMatch`/
