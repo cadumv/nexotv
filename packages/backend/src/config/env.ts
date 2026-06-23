@@ -37,9 +37,12 @@ const env = {
     // the IPTV EPG misses. Empty = agenda disabled (falls back to EPG-only games).
     SOFASCORE_RAPIDAPI_KEY: process.env.SOFASCORE_RAPIDAPI_KEY || null,
     SOFASCORE_RAPIDAPI_HOST: process.env.SOFASCORE_RAPIDAPI_HOST || 'sofascore.p.rapidapi.com',
-    // Cache the aggregated agenda this long (protects the free-tier quota; the
-    // schedule barely changes intraday). Default 8h.
-    SOFASCORE_TTL_MS: parseInt(process.env.SOFASCORE_TTL_MS || '') || 28800000,
+    // Cache the aggregated agenda this long (protects the free-tier quota — only
+    // 500 req/month; each refresh ≈ one request per channel). The schedule barely
+    // changes intraday and the per-channel feed already spans the next few days,
+    // so one refresh near the day's first kickoff covers all upcoming games too.
+    // Default 12h.
+    SOFASCORE_TTL_MS: parseInt(process.env.SOFASCORE_TTL_MS || '') || 43200000,
     // Only spend Sofascore requests when a match is live or starts within this
     // many minutes (gauged from the free EPG). Idle periods => zero requests.
     SOFASCORE_PREFETCH_MIN: parseInt(process.env.SOFASCORE_PREFETCH_MIN || '') || 30,
