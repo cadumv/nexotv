@@ -6,6 +6,7 @@
 // Rede (trocável)
 export * from './http/HttpClient';
 export { FetchHttpClient } from './http/FetchHttpClient';
+export { createCapacitorHttpClient } from './http/CapacitorHttpClient';
 
 // Texto (puro)
 export * from './text/normalize';
