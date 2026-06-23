@@ -74,7 +74,27 @@ enriquecimento TMDB).
 
 ---
 
-## 🔄 EM ANDAMENTO — Fase 1 (core)
+## ✅ Fase 1 (core) — CONCLUÍDA E TESTADA
+O `@nexotv/core` agora roda a lógica inteira independente de servidor. O
+**`engine/NexoEngine`** (porte do M3UEPGAddon) foi **testado offline com fixtures
+reais** (raw_live.json 2768 canais, raw_epg.xml, wk.json da agenda):
+- idPrefix `b59c5679` **idêntico ao server** ✅
+- manifest (51 catálogos, "Futebol Ao Vivo" 1º) ✅
+- catálogos (canais/filmes/séries/categorias) ✅
+- **jogos** (EPG + agenda relay, [AO VIVO], emissoras mapeadas) ✅
+- meta de canal com EPG (AGORA/A SEGUIR) ✅
+- streams (canal / filme / episódio / jogo / IMDB) ✅
+API do engine: `load()`, `getManifest()`, `getCatalog(args)`, `getMeta(type,id)`,
+`getStreams(id)`. Deps injetadas: `{ http, options }`.
+
+## 🔄 PRÓXIMA FASE — UI + empacotamento
+1. **Fork do stremio-web** + redesign Netflix; trocar a fonte de dados pelo
+   `NexoEngine` (via `createCapacitorHttpClient` no app).
+2. **Capacitor** → APK (Android TV/Fire TV) com player nativo; depois Tizen/webOS.
+3. Tela de setup (login IPTV) + `sofascoreAgendaUrl` embutido.
+4. Convergir o backend pra importar do core (cleanup; opcional).
+
+## 🗄️ Histórico — Fase 1 (core)
 Extrair a lógica reaproveitável pro `packages/core` (independente de servidor),
 com **HTTP trocável** (`HttpClient`: `fetch` no server / nativo no app).
 Construído **em paralelo** ao backend (não quebra o que está rodando); convergir

@@ -43,3 +43,6 @@ export {
     fetchXtreamData, fetchVodInfo, fetchSeriesInfo,
     type XtreamOpts, type XtreamData,
 } from './providers/xtreamProvider';
+
+// Engine (orquestra catálogos/meta/stream)
+export { NexoEngine, type EngineOptions, type EngineDeps } from './engine/NexoEngine';
