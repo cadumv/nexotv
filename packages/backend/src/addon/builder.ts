@@ -10,12 +10,10 @@ async function createAddon(config: AddonConfig) {
     config.instanceId = config.instanceId ||
         (crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(8).toString('hex'));
 
-    // The addon instance forces enableEpg=true before computing its cacheKey
-    // (EPG powers the games catalog + programming). Apply the same here so the
-    // manifest's idPrefixes match the catalog/meta/stream id prefixes — otherwise
-    // Stremio gets a different idPrefix than the tiles and clicks resolve nowhere.
-    config.enableEpg = true;
-
+    // Compute the cacheKey/idPrefix from the ORIGINAL config (no forced flags),
+    // matching what M3UEPGAddon does. This keeps the idPrefix stable so the
+    // manifest's idPrefixes, the catalog/meta/stream ids, AND users' previously
+    // saved items all agree. (The instance forces enableEpg=true afterwards.)
     const cacheKey = createCacheKey(config);
     const idPrefix = cacheKey.slice(0, 8);
     const manifest = createManifest(idPrefix, config.catalogName);

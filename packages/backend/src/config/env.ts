@@ -32,6 +32,17 @@ const env = {
     CONFIG_SECRET: process.env.CONFIG_SECRET || null,
     // TMDB API key (v3) — enables matching translated (pt-BR) titles for IMDB integration.
     TMDB_API_KEY: process.env.TMDB_API_KEY || null,
+    // Sofascore (via RapidAPI/Dojo) — powers the "Futebol Ao Vivo" agenda with the
+    // exact BR broadcaster per game (Premiere 2, SporTV, DAZN…), covering matches
+    // the IPTV EPG misses. Empty = agenda disabled (falls back to EPG-only games).
+    SOFASCORE_RAPIDAPI_KEY: process.env.SOFASCORE_RAPIDAPI_KEY || null,
+    SOFASCORE_RAPIDAPI_HOST: process.env.SOFASCORE_RAPIDAPI_HOST || 'sofascore.p.rapidapi.com',
+    // Cache the aggregated agenda this long (protects the free-tier quota; the
+    // schedule barely changes intraday). Default 8h.
+    SOFASCORE_TTL_MS: parseInt(process.env.SOFASCORE_TTL_MS || '') || 28800000,
+    // Only spend Sofascore requests when a match is live or starts within this
+    // many minutes (gauged from the free EPG). Idle periods => zero requests.
+    SOFASCORE_PREFETCH_MIN: parseInt(process.env.SOFASCORE_PREFETCH_MIN || '') || 30,
     // Anti-403: User-Agent for Xtream API requests (some panels reject non-player UAs).
     XTREAM_USER_AGENT: process.env.XTREAM_USER_AGENT || 'VLC/3.0.20 LibVLC/3.0.20',
     // Anti-403: route outbound IPTV catalog fetches through a clean-IP proxy

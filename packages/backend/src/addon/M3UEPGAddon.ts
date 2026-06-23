@@ -8,6 +8,7 @@ import * as xtreamProvider from '../providers/xtreamProvider';
 import * as iptvOrgProvider from '../providers/iptvOrgProvider';
 import * as m3uProvider from '../providers/m3uProvider';
 import { normalizeTitle, resolveImdbTitle, resolveTmdbTitles, fetchTmdbMeta } from '../utils/titleMatch';
+import { fetchSofascoreAgenda } from '../utils/sofascoreAgenda';
 
 const CACHE_ENABLED = env.CACHE_ENABLED;
 const CACHE_TTL_MS = env.CACHE_TTL_MS;
@@ -121,11 +122,15 @@ export class M3UEPGAddon {
     constructor(config: AddonConfig = {}, manifestRef?: any) {
         this.providerName = config.provider || 'xtream';
         this.config = config;
-        // Always pull EPG so the "⚽ Futebol - Jogos" catalog (built from the guide) works.
-        this.config.enableEpg = true;
         this.manifestRef = manifestRef;
+        // Compute the id namespace BEFORE forcing any feature flags, so the
+        // idPrefix stays stable (= the value users' saved Library / Continue-
+        // Watching items already reference). Forcing enableEpg first would shift
+        // the hash and orphan those items ("no information found about this").
         this.cacheKey = createCacheKey(config);
         this.idPrefix = this.cacheKey.slice(0, 8);
+        // Now force EPG on (powers the "Futebol Ao Vivo" catalog + programming).
+        this.config.enableEpg = true;
         this.updateInterval = env.UPDATE_INTERVAL_MS;
         this.channels = [];
         this.channelMap = new Map();
@@ -592,6 +597,112 @@ export class M3UEPGAddon {
         return out;
     }
 
+    // Compact a string to lowercase alphanumerics (accent-free) for fuzzy
+    // substring matching of team names against channel names.
+    static _compact(s: string) {
+        return M3UEPGAddon.stripAccents(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    // Extract the two teams from a "Team A x Team B" title, compacted.
+    _teamsFromTitle(title: string): { a: string; b: string } | null {
+        const t = (title || '').replace(/\s*-?\s*ao vivo/i, '').trim();
+        const parts = t.split(/\s+x\s+/i);
+        if (parts.length < 2) return null;
+        const a = M3UEPGAddon._compact(parts[0]);
+        const b = M3UEPGAddon._compact(parts[parts.length - 1]);
+        if (a.length < 3 || b.length < 3) return null;
+        return { a, b };
+    }
+
+    _channelNameIsReplay(name: string) {
+        const t = (name || '').toLowerCase();
+        return /^vt\b|reprise|replay|compacto|melhores momentos|\(r\)|gols de/.test(t);
+    }
+
+    // Base name of an IPTV channel: accent-free, lowercased, without [quality] tags
+    // and bare quality words — for matching against Sofascore channel names.
+    _iptvBase(name: string) {
+        return M3UEPGAddon.stripAccents(name || '').toLowerCase()
+            .replace(/\[[^\]]*\]/g, ' ')
+            .replace(/\b(fhd|hd|sd|4k|uhd|h265|h264)\b/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+    }
+
+    // Map a Sofascore channel display name (e.g. "Premiere 2", "TV Globo", "DAZN")
+    // to the user's matching IPTV channels — one per quality tier (best first).
+    _matchSofaToIptv(sofaName: string, baseList: { c: any; base: string }[]) {
+        const want = this._iptvBase(sofaName);
+        let cands: { c: any; base: string }[];
+        if (want.includes('globo')) cands = baseList.filter(x => x.base.includes('globo'));
+        else if (want === 'dazn') cands = baseList.filter(x => x.base === 'dazn' || x.base.startsWith('dazn '));
+        else if (want === 'premiere') cands = baseList.filter(x => x.base === 'premiere' || x.base.startsWith('premiere clube'));
+        else if (want === 'sbt' || want === '+sbt') cands = baseList.filter(x => x.base === 'sbt' || x.base.startsWith('sbt '));
+        else if (want.includes('paramount')) cands = baseList.filter(x => x.base.includes('paramount'));
+        // Disney+ only — NOT "Desenhos Disney" and other Disney-branded channels.
+        else if (want.includes('disney')) cands = baseList.filter(x => x.base.includes('disney plus') || x.base.includes('disney+'));
+        else if (want.includes('caze')) cands = baseList.filter(x => x.base.includes('caze'));
+        else cands = baseList.filter(x => x.base === want);
+        const seen = new Set<number>();
+        const out: any[] = [];
+        for (const x of cands.sort((a, b) => this._channelQualityRank(b.c) - this._channelQualityRank(a.c))) {
+            const t = this._channelQualityRank(x.c);
+            if (seen.has(t)) continue;
+            seen.add(t);
+            out.push(x.c);
+        }
+        return out;
+    }
+
+    // Sofascore uses English national-team names; show them in pt-BR. Club names
+    // already come localized, so anything not in the dict passes through.
+    static _TEAM_PT: Record<string, string> = {
+        'brazil': 'Brasil', 'norway': 'Noruega', 'senegal': 'Senegal', 'england': 'Inglaterra',
+        'ghana': 'Gana', 'scotland': 'Escocia', 'czechia': 'Tchequia', 'czech republic': 'Tchequia',
+        'mexico': 'Mexico', 'jordan': 'Jordania', 'algeria': 'Argelia', 'france': 'Franca',
+        'iraq': 'Iraque', 'argentina': 'Argentina', 'austria': 'Austria', 'portugal': 'Portugal',
+        'uzbekistan': 'Uzbequistao', 'colombia': 'Colombia', 'switzerland': 'Suica', 'canada': 'Canada',
+        'spain': 'Espanha', 'germany': 'Alemanha', 'italy': 'Italia', 'netherlands': 'Holanda',
+        'belgium': 'Belgica', 'croatia': 'Croacia', 'uruguay': 'Uruguai', 'ukraine': 'Ucrania',
+        'united states': 'Estados Unidos', 'usa': 'Estados Unidos', 'south korea': 'Coreia do Sul',
+        'japan': 'Japao', 'morocco': 'Marrocos', 'denmark': 'Dinamarca', 'poland': 'Polonia',
+        'bulgaria': 'Bulgaria', 'congo dr': 'RD Congo', 'dr congo': 'RD Congo',
+        'south africa': 'Africa do Sul', 'sweden': 'Suecia', 'turkey': 'Turquia', 'turkiye': 'Turquia',
+        'qatar': 'Catar', 'haiti': 'Haiti', 'panama': 'Panama', 'ivory coast': 'Costa do Marfim',
+        'curacao': 'Curacao', 'bosnia & herzegovina': 'Bosnia e Herzegovina', 'bosnia and herzegovina': 'Bosnia e Herzegovina',
+        'wales': 'Pais de Gales', 'ireland': 'Irlanda', 'greece': 'Grecia',
+        'serbia': 'Servia', 'hungary': 'Hungria', 'finland': 'Finlandia',
+        'paraguay': 'Paraguai', 'ecuador': 'Equador', 'peru': 'Peru', 'chile': 'Chile', 'bolivia': 'Bolivia',
+        'saudi arabia': 'Arabia Saudita', 'egypt': 'Egito', 'nigeria': 'Nigeria', 'cameroon': 'Camaroes',
+        'australia': 'Australia', 'new zealand': 'Nova Zelandia', 'costa rica': 'Costa Rica', 'honduras': 'Honduras',
+    };
+    _translateTeam(name: string) {
+        const k = M3UEPGAddon.stripAccents(name || '').toLowerCase().trim();
+        return M3UEPGAddon._TEAM_PT[k] || name;
+    }
+
+    // Build game entries from the Sofascore agenda, mapping each match's BR
+    // broadcasters to the user's IPTV channels. Games with no channel the user
+    // actually has are dropped (can't be watched).
+    async _buildSofaGames(allowNetwork: boolean) {
+        const agenda = await fetchSofascoreAgenda(allowNetwork);
+        if (!agenda.length) return [];
+        const baseList = (this.channels || []).map(c => ({ c, base: this._iptvBase(c.name) }));
+        const out: any[] = [];
+        for (const ag of agenda) {
+            const chMap = new Map<string, any>();
+            for (const sofaName of ag.channels) {
+                for (const c of this._matchSofaToIptv(sofaName, baseList)) chMap.set(c.id, c);
+            }
+            if (!chMap.size) continue;
+            const channels = [...chMap.values()]
+                .sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a))
+                .slice(0, 15);
+            const title = `${this._translateTeam(ag.home)} x ${this._translateTeam(ag.away)}`;
+            out.push({ title, start: ag.startMs, stop: ag.stopMs, channels, _sofa: true });
+        }
+        return out;
+    }
+
     async getGamesForCatalog() {
         await this.ensureDataLoaded();
         await this.ensureEpgLoaded();
@@ -631,14 +742,51 @@ export class M3UEPGAddon {
                 for (const c of chans) if (!g.chans.has(c.id)) g.chans.set(c.id, c);
             }
         }
-        const out: any[] = [];
+        // Augment each match with channels whose NAME contains both teams (event/
+        // PPV channels named after the match), even when their EPG doesn't list it.
+        // This is how we pick up providers the guide misses. Precompute compacted
+        // names once; require BOTH team names present to avoid false positives.
+        const allChans = (this.channels || []).map(c => ({ c, n: M3UEPGAddon._compact(c.name) }));
+        for (const g of groups.values()) {
+            const teams = this._teamsFromTitle(g.title);
+            if (!teams) continue;
+            for (const x of allChans) {
+                if (!x.n.includes(teams.a) || !x.n.includes(teams.b)) continue;
+                if (this._channelNameIsReplay(x.c.name)) continue;
+                if (!g.chans.has(x.c.id)) g.chans.set(x.c.id, x.c);
+            }
+        }
+
+        const epgOut: any[] = [];
         for (const g of groups.values()) {
             const channels = this._dedupGameChannels([...g.chans.values()]);
-            out.push({ title: g.title, start: g.start, stop: g.stop, channels });
+            epgOut.push({ title: g.title, start: g.start, stop: g.stop, channels });
         }
+
+        // Sofascore agenda fills the EPG's blind spots (Premiere/DAZN games it omits)
+        // and gives the EXACT broadcaster. To save the free-tier quota, only spend a
+        // request when a match is live or starts within SOFASCORE_PREFETCH_MIN — judged
+        // from the (free) EPG. Idle periods => allowNetwork=false => zero requests.
+        const prefetchMs = (env.SOFASCORE_PREFETCH_MIN as number) * 60000;
+        const allowNetwork = epgOut.some(g =>
+            now >= (g.start - prefetchMs) && now <= (g.stop || g.start + 2.5 * 3600 * 1000));
+        let merged = epgOut;
+        try {
+            // Sofascore is the better source when available: it already lists every
+            // BR broadcaster per game (incl. the Premiere/DAZN/Caze the EPG misses),
+            // with consistent names and no false positives (e.g. basketball). So when
+            // we have it, use it as the SOLE source — avoids the EPG-vs-Sofascore name
+            // mismatch duplicates ("America-MG" vs "America Mineiro"). EPG stays the
+            // fallback for idle windows / no key / quota exhausted.
+            const sofaGames = await this._buildSofaGames(allowNetwork);
+            if (sofaGames.length) merged = sofaGames;
+        } catch (e: any) {
+            this.log.warn?.('[GAMES] Sofascore agenda failed', e?.message);
+        }
+
         // Live matches first (most useful right now), then by kickoff time.
-        out.sort((a, b) => (this._isGameLive(b, now) ? 1 : 0) - (this._isGameLive(a, now) ? 1 : 0) || a.start - b.start);
-        return out;
+        merged.sort((a, b) => (this._isGameLive(b, now) ? 1 : 0) - (this._isGameLive(a, now) ? 1 : 0) || a.start - b.start);
+        return merged;
     }
 
     // A game tile must have a UNIQUE id (several games air on the same channel —
