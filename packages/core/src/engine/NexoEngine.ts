@@ -7,7 +7,8 @@ import { HttpClient } from '../http/HttpClient';
 import { AddonConfig } from '../types';
 import { createCacheKey, idPrefixFromCacheKey } from '../config/cacheKey';
 import { stripAccents, normalizeTitle, cleanForSearch, compact } from '../text/normalize';
-import { getCurrentProgram, getUpcomingPrograms } from '../parsers/epgParser';
+import { parseEPG, getCurrentProgram, getUpcomingPrograms } from '../parsers/epgParser';
+import { parseM3U } from '../parsers/m3uParser';
 import { fetchTmdbMeta, resolveTmdbTitles, resolveImdbTitle } from '../meta/titleMatch';
 import { fetchSofascoreAgenda, AgendaConfig } from '../agenda/sofascoreAgenda';
 import { fetchXtreamData, fetchVodInfo, fetchSeriesInfo, XtreamOpts } from '../providers/xtreamProvider';
@@ -57,6 +58,15 @@ export class NexoEngine {
     private infoTtl = 6 * 3600 * 1000;
 
     constructor(config: AddonConfig, deps: EngineDeps) {
+        // Normaliza URLs (qualquer servidor): adiciona http:// se faltar e tira
+        // barras finais — evita // duplicado e "host sem esquema".
+        const norm = (u?: string) => {
+            let s = (u || '').trim();
+            if (!s) return s;
+            if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+            return s.replace(/\/+$/, '');
+        };
+        config = { ...config, xtreamUrl: norm(config.xtreamUrl), m3uUrl: norm(config.m3uUrl), epgUrl: config.epgUrl ? norm(config.epgUrl) : config.epgUrl };
         this.config = config;
         this.http = deps.http;
         this.options = deps.options || {};
@@ -80,15 +90,45 @@ export class NexoEngine {
 
     /** Carrega dados do provedor (canais/VOD/séries/EPG) e monta índices. */
     async load(): Promise<void> {
-        const data = await fetchXtreamData(this.http, { ...this.config, enableEpg: true }, this._xopts);
-        this.channels = data.channels;
-        this.movies = data.movies;
-        this.series = data.series;
-        this.epgData = data.epgData;
+        const provider = this.config.provider || 'xtream';
+        if (provider === 'm3u') {
+            await this._loadM3U();
+        } else {
+            const data = await fetchXtreamData(this.http, { ...this.config, enableEpg: true }, this._xopts);
+            this.channels = data.channels;
+            this.movies = data.movies;
+            this.series = data.series;
+            this.epgData = data.epgData;
+        }
         this.channelMap = new Map(this.channels.map(c => [c.id, c]));
         this.movieMap = new Map(this.movies.map(m => [m.id, m]));
         this.seriesMap = new Map(this.series.map(s => [s.id, s]));
+        this._groupsMemo = null;
         this.buildTitleIndexes();
+    }
+
+    /** Provedor M3U (lista .m3u/.m3u8) — cobre IPTV que não usa Xtream. */
+    private async _loadM3U(): Promise<void> {
+        const url = this.config.m3uUrl;
+        if (!url) throw new Error('m3uUrl ausente');
+        const ua = { 'User-Agent': this.options.userAgent || 'VLC/3.0.20 LibVLC/3.0.20' };
+        const r = await this.http.get(url, { headers: ua, timeoutMs: this.options.fetchTimeoutMs ?? 30000 });
+        if (!r || !r.ok) throw new Error('M3U fetch failed');
+        const { channels, epgUrl } = parseM3U(await r.text());
+        this.channels = channels.map((c: any, i: number) => ({
+            id: `xc${this.idPrefix}_${i}`,
+            name: c.name, type: 'tv', url: c.url, logo: c.logo, category: c.group,
+            epg_channel_id: c.tvgId, userAgent: c.userAgent, referrer: c.referrer,
+            attributes: { 'tvg-logo': c.logo, 'tvg-id': c.tvgId, 'group-title': c.group },
+        }));
+        this.movies = []; this.series = []; this.epgData = {};
+        const epgSrc = (this.config.epgUrl && String(this.config.epgUrl).trim()) || epgUrl;
+        if (epgSrc) {
+            try {
+                const er = await this.http.get(epgSrc, { headers: ua, timeoutMs: this.options.epgFetchTimeoutMs ?? 60000 });
+                if (er && er.ok) this.epgData = await parseEPG(await er.text(), { maxBytes: this.options.epgMaxBytes });
+            } catch { /* EPG opcional */ }
+        }
     }
 
     get loaded() { return this.channels.length > 0; }
@@ -124,7 +164,7 @@ export class NexoEngine {
             resources: ['catalog', 'stream', 'meta'],
             types: ['tv', 'movie', 'series'],
             catalogs,
-            idPrefixes: ['tt', `xc${p}_`, `vod${p}_`, `ser${p}_`, `epi${p}_`, `io${p}_`, `m3${p}_`, `game${p}_`],
+            idPrefixes: ['tt', `xc${p}_`, `vod${p}_`, `ser${p}_`, `epi${p}_`, `io${p}_`, `m3${p}_`, `game${p}_`, `chg${p}_`],
             behaviorHints: { configurable: true, configurationRequired: false },
         };
     }
@@ -168,7 +208,7 @@ export class NexoEngine {
         } else if (args.type === 'series' && baseId === 'nexotv_series') {
             items = this.series; toMeta = (i) => this.generateSeriesPreview(i);
         } else if (args.type === 'tv' && baseId === 'iptv_channels') {
-            items = this.channels; toMeta = (i) => this.generateMetaPreview(i);
+            items = this.getChannelGroups(); toMeta = (i) => this.generateChannelGroupPreview(i);
         } else {
             return { metas: [] };
         }
@@ -214,6 +254,101 @@ export class NexoEngine {
             poster: logoUrl, background: logoUrl, posterShape: 'square',
             genres: item.category ? [item.category] : (item.attributes?.['group-title'] ? [item.attributes['group-title']] : ['Live TV']),
             runtime: 'Live',
+        };
+    }
+
+    // ===================== CANAIS estilo TV PAGA (dedup de qualidades) =====================
+
+    // Nome-base do canal: tira [tags] e tokens de qualidade soltos → 1 entrada por
+    // emissora ("ADULT SWIM [FHD][H265]" e "ADULT SWIM [SD]" → "ADULT SWIM").
+    _channelBaseName(name: string) {
+        return (name || '')
+            .replace(/\[[^\]]*\]/g, ' ')
+            .replace(/\b(FHD|HD|SD|4K|UHD|H265|H264|HEVC|FULLHD)\b/gi, ' ')
+            .replace(/\s+/g, ' ').trim();
+    }
+
+    _encodeChannelGroupId(key: string) {
+        const b64 = (typeof Buffer !== 'undefined' ? Buffer.from(key, 'utf8').toString('base64') : btoa(unescape(encodeURIComponent(key))))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        return `chg${this.idPrefix}_${b64}`;
+    }
+    _decodeChannelGroupId(id: string): string | null {
+        try {
+            let b64 = id.slice(`chg${this.idPrefix}_`.length).replace(/-/g, '+').replace(/_/g, '/');
+            const pad = (4 - (b64.length % 4)) % 4; if (pad) b64 += '='.repeat(pad);
+            return (typeof Buffer !== 'undefined') ? Buffer.from(b64, 'base64').toString('utf8') : decodeURIComponent(escape(atob(b64)));
+        } catch { return null; }
+    }
+
+    private _groupsMemo: any[] | null = null;
+
+    /** Agrupa canais por emissora (dedup de qualidades). Cada grupo carrega as variantes. */
+    getChannelGroups(src?: any[]) {
+        if (!src && this._groupsMemo) return this._groupsMemo;
+        const channels = src || this.channels;
+        const groups = new Map<string, { key: string; base: string; category: any; attributes: any; channels: any[] }>();
+        for (const c of channels) {
+            const base = this._channelBaseName(c.name) || c.name;
+            const key = `${base.toLowerCase()}|${c.category || ''}`;
+            if (!groups.has(key)) groups.set(key, { key: `${base}|${c.category || ''}`, base, category: c.category, attributes: c.attributes, channels: [] });
+            groups.get(key)!.channels.push(c);
+        }
+        const out: any[] = [];
+        for (const g of groups.values()) {
+            g.channels.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
+            // expõe campos p/ os filtros de categoria/busca do getCatalog
+            out.push({ ...g, name: g.base });
+        }
+        if (!src) this._groupsMemo = out;
+        return out;
+    }
+
+    private _channelsForGroupKey(key: string) {
+        const sep = key.lastIndexOf('|');
+        const base = (sep >= 0 ? key.slice(0, sep) : key);
+        const cat = sep >= 0 ? key.slice(sep + 1) : '';
+        const baseLc = base.toLowerCase();
+        const variants = this.channels.filter(c => this._channelBaseName(c.name).toLowerCase() === baseLc && (c.category || '') === cat);
+        variants.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
+        return { base, cat, variants };
+    }
+
+    generateChannelGroupPreview(g: any) {
+        const rep = g.channels[0] || {};
+        const logo = this.deriveFallbackLogoUrl(rep);
+        const epgId = rep.attributes?.['tvg-id'] || rep.epg_channel_id;
+        const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
+        const agora = cur ? `Agora: ${stripAccents(cur.title)}` : undefined;
+        return {
+            id: this._encodeChannelGroupId(g.key), type: 'tv', name: g.base,
+            poster: logo, background: logo, posterShape: 'square',
+            description: agora, releaseInfo: agora,
+            genres: g.category ? [g.category] : ['Live TV'],
+        };
+    }
+
+    _getChannelGroupMeta(id: string) {
+        const key = this._decodeChannelGroupId(id);
+        if (!key) return null;
+        const { base, variants } = this._channelsForGroupKey(key);
+        if (!variants.length) return null;
+        const rep = variants[0];
+        const epgId = rep.attributes?.['tvg-id'] || rep.attributes?.['tvg-name'] || rep.epg_channel_id;
+        const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
+        const upcoming = getUpcomingPrograms(this.epgData, epgId, 4, this.epgOffset);
+        const hhmm = (dt: any) => dt ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : '';
+        let description = stripAccents(base);
+        if (cur) {
+            const s = hhmm(cur.startTime), e = hhmm(cur.stopTime);
+            description += `\n\nAGORA: ${stripAccents(cur.title)}${s && e ? ` (${s}-${e})` : ''}`;
+            if (cur.description) description += `\n\n${stripAccents(cur.description)}`;
+        }
+        if (upcoming.length) { description += '\n\nA SEGUIR:\n'; for (const p of upcoming) description += `${hhmm(p.startTime)} - ${stripAccents(p.title)}\n`; }
+        const logo = this.deriveFallbackLogoUrl(rep);
+        return {
+            id, type: 'tv', name: base, poster: logo, background: logo, posterShape: 'square',
+            description, genres: rep.category ? [rep.category] : ['Live TV'], runtime: 'Live',
         };
     }
 
@@ -514,6 +649,7 @@ export class NexoEngine {
     async getDetailedMeta(id: string) {
         if (id.startsWith('tt')) return null;
         if (id.startsWith(`game${this.idPrefix}_`)) return this._getGameMeta(id);
+        if (id.startsWith(`chg${this.idPrefix}_`)) return this._getChannelGroupMeta(id);
         if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieMeta(id);
         if (id.startsWith(`ser${this.idPrefix}_`)) return this.getSeriesMeta(id);
         const item = this.channelMap.get(id);
@@ -661,6 +797,14 @@ export class NexoEngine {
             if (!info?.cs?.length) return [];
             const all: any[] = [];
             for (const cid of info.cs) for (const s of await this.getStreams(cid)) all.push(s);
+            return all;
+        }
+        if (id.startsWith(`chg${this.idPrefix}_`)) {
+            const key = this._decodeChannelGroupId(id);
+            if (!key) return [];
+            const { variants } = this._channelsForGroupKey(key);
+            const all: any[] = [];
+            for (const c of variants) for (const s of await this.getStreams(c.id)) all.push(s);
             return all;
         }
         if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieStreams(id);

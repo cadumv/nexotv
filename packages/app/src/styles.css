@@ -7,6 +7,9 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .brand { font-size: 48px; font-weight: 800; letter-spacing: 2px; color: #e50914; margin: 0; }
 .setup input { padding: 12px 14px; border-radius: 8px; border: 1px solid #2a2a30; background: #16161c; color: #fff; font-size: 15px; }
 .setup button, .home button.primary { background: #e50914; color: #fff; border: 0; padding: 12px; border-radius: 8px; font-size: 16px; font-weight: 700; cursor: pointer; }
+.tabs { display: flex; gap: 8px; justify-content: center; }
+.tabs button { flex: 1; background: #16161c; color: #aaa; border: 1px solid #2a2a30; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+.tabs button.on { background: #e50914; color: #fff; border-color: #e50914; }
 
 /* ---- Home ---- */
 .topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; position: sticky; top: 0; background: linear-gradient(#0b0b0f, rgba(11,11,15,.6)); z-index: 5; }

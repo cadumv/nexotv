@@ -10,24 +10,40 @@ function loadSaved(): SavedConfig | null {
     try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 }
 
-/** Tela de setup (login IPTV). Sem segredos no repo — o usuário digita. */
+/** Tela de setup — funciona com QUALQUER IPTV: Xtream (url/user/senha) ou lista M3U. */
 function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
+    const [mode, setMode] = useState<'xtream' | 'm3u'>('xtream');
     const [url, setUrl] = useState('');
     const [user, setUser] = useState('');
     const [pass, setPass] = useState('');
+    const [m3u, setM3u] = useState('');
+    const [epg, setEpg] = useState('');
     const [agenda, setAgenda] = useState('');
+    const save = () => {
+        const options: EngineOptions = { addonName: 'Rajada', sofascoreAgendaUrl: agenda.trim() || null };
+        if (mode === 'xtream') {
+            onSave({ config: { provider: 'xtream', xtreamUrl: url.trim(), xtreamUsername: user.trim(), xtreamPassword: pass.trim(), enableVod: true }, options });
+        } else {
+            onSave({ config: { provider: 'm3u', m3uUrl: m3u.trim(), epgUrl: epg.trim() || undefined }, options });
+        }
+    };
     return (
         <div className="setup">
             <h1 className="brand">RAJADA</h1>
-            <p>Conecte seu IPTV (Xtream)</p>
-            <input placeholder="URL (http://servidor.com)" value={url} onChange={e => setUrl(e.target.value)} />
-            <input placeholder="Usuário" value={user} onChange={e => setUser(e.target.value)} />
-            <input placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} />
-            <input placeholder="Agenda URL (opcional, Worker /agenda)" value={agenda} onChange={e => setAgenda(e.target.value)} />
-            <button onClick={() => onSave({
-                config: { provider: 'xtream', xtreamUrl: url.trim(), xtreamUsername: user.trim(), xtreamPassword: pass.trim(), enableVod: true },
-                options: { addonName: 'Rajada', sofascoreAgendaUrl: agenda.trim() || null },
-            })}>Entrar</button>
+            <div className="tabs">
+                <button className={mode === 'xtream' ? 'on' : ''} onClick={() => setMode('xtream')}>Xtream</button>
+                <button className={mode === 'm3u' ? 'on' : ''} onClick={() => setMode('m3u')}>Lista M3U</button>
+            </div>
+            {mode === 'xtream' ? (<>
+                <input placeholder="URL (http://servidor.com)" value={url} onChange={e => setUrl(e.target.value)} />
+                <input placeholder="Usuário" value={user} onChange={e => setUser(e.target.value)} />
+                <input placeholder="Senha" type="password" value={pass} onChange={e => setPass(e.target.value)} />
+            </>) : (<>
+                <input placeholder="URL da lista M3U (http://…/get.php?…)" value={m3u} onChange={e => setM3u(e.target.value)} />
+                <input placeholder="EPG URL (opcional)" value={epg} onChange={e => setEpg(e.target.value)} />
+            </>)}
+            <input placeholder="Agenda Futebol URL (opcional, Worker /agenda)" value={agenda} onChange={e => setAgenda(e.target.value)} />
+            <button onClick={save}>Entrar</button>
         </div>
     );
 }
@@ -46,15 +62,27 @@ function App() {
             const eng = await createEngine(s.config, s.options);
             setEngine(eng);
             const man = eng.getManifest();
-            // Mostra as fileiras base (jogos, canais, filmes, séries) — Netflix-style.
-            const base = man.catalogs.filter((c: any) => ['nexotv_games', 'iptv_channels', 'nexotv_vod', 'nexotv_series'].includes(c.id));
-            const built: Row[] = [];
-            for (const c of base) {
-                const { metas } = await eng.getCatalog({ type: c.type, id: c.id });
-                if (metas.length) built.push({ id: c.id, type: c.type, name: c.name, metas: metas.slice(0, 30) });
-            }
+            const cats: any[] = man.catalogs;
+            // Ordem estilo "TV paga": Futebol → categorias de canais (grade) →
+            // Filmes (+ alguns gêneros) → Séries.
+            const pick = (id: string) => cats.find((c: any) => c.id === id);
+            const ordered: any[] = [
+                pick('nexotv_games'),
+                ...cats.filter((c: any) => c.id.startsWith('iptv_channels_g_')),
+                pick('nexotv_vod'),
+                ...cats.filter((c: any) => c.id.startsWith('nexotv_vod_g_')).slice(0, 8),
+                pick('nexotv_series'),
+                ...cats.filter((c: any) => c.id.startsWith('nexotv_series_g_')).slice(0, 6),
+            ].filter(Boolean);
+            // Constrói as fileiras em paralelo (carrega rápido).
+            const built = (await Promise.all(ordered.map(async (c: any) => {
+                try {
+                    const { metas } = await eng.getCatalog({ type: c.type, id: c.id });
+                    return metas.length ? { id: c.id, type: c.type, name: c.name, metas: metas.slice(0, 30) } as Row : null;
+                } catch { return null; }
+            }))).filter(Boolean) as Row[];
             setRows(built);
-            setStatus('');
+            setStatus(built.length ? '' : 'Nenhum conteúdo (provedor fora do ar?)');
         } catch (e: any) {
             setStatus('Erro: ' + (e?.message || e));
         }
