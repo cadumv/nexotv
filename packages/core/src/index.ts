@@ -3,13 +3,14 @@
  * Ver NEXOTV_APP_ROADMAP.md (Fase 1) para o plano de migração.
  */
 
-// Rede (trocável)
-export * from './http/HttpClient';
+// Rede (trocável) — re-exports explícitos (sem `export *`) p/ o bundler do app
+// resolver imports nomeados a partir do CJS do core.
+export type { HttpClient, HttpRequestOptions, HttpResponse } from './http/HttpClient';
 export { FetchHttpClient } from './http/FetchHttpClient';
 export { createCapacitorHttpClient } from './http/CapacitorHttpClient';
 
 // Texto (puro)
-export * from './text/normalize';
+export { stripAccents, compact, normalizeTitle, cleanForSearch } from './text/normalize';
 
 // Cache (puro)
 export { default as LRUCache } from './utils/lruCache';

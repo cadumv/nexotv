@@ -88,11 +88,21 @@ API do engine: `load()`, `getManifest()`, `getCatalog(args)`, `getMeta(type,id)`
 `getStreams(id)`. Deps injetadas: `{ http, options }`.
 
 ## 🔄 PRÓXIMA FASE — UI + empacotamento
-1. **Fork do stremio-web** + redesign Netflix; trocar a fonte de dados pelo
-   `NexoEngine` (via `createCapacitorHttpClient` no app).
-2. **Capacitor** → APK (Android TV/Fire TV) com player nativo; depois Tizen/webOS.
-3. Tela de setup (login IPTV) + `sofascoreAgendaUrl` embutido.
-4. Convergir o backend pra importar do core (cleanup; opcional).
+**Scaffold do app criado** em `packages/app` (Vite+React+Capacitor):
+`engineHost.ts` (ponte app↔core, HTTP nativo/fetch), `App.tsx` (home Netflix MVP:
+setup IPTV + fileiras de catálogo), `capacitor.config.json` (com.rajada.app).
+
+**2 follow-ups pro build web/APK compilar (ver `packages/app/README.md`):**
+1. Resolver core no bundler — alias Vite `@nexotv/core` → `../core/src` (FEITO no
+   vite.config) + paths no tsconfig se precisar.
+2. **EPG no browser**: trocar `xml2js` (puxa builtins do Node) por
+   `fast-xml-parser`/`DOMParser` no `core/parsers/epgParser` (mesma saída).
+   Validado no Node com xml2js; falta a variante browser.
+
+Depois:
+3. Redesign Netflix completo (usar skill artifact-design); player nativo (ExoPlayer).
+4. `npx cap add android` → `cap:sync` → APK; testar Fire TV/Google TV.
+5. Tizen/webOS a partir do mesmo código. Convergir backend→core (cleanup, opcional).
 
 ## 🗄️ Histórico — Fase 1 (core)
 Extrair a lógica reaproveitável pro `packages/core` (independente de servidor),
