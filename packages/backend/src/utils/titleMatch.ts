@@ -114,3 +114,78 @@ export async function resolveTmdbTitles(
     tmdbCache.set(key, { data, ts: Date.now() });
     return data;
 }
+
+/**
+ * Clean a provider title for a TMDB search: drop bracketed tags, quality tokens
+ * and trailing year, but keep the readable words/accents (TMDB search is fuzzy).
+ */
+export function cleanForSearch(s: string | undefined | null): string {
+    if (!s) return '';
+    let t = String(s).replace(/\[[^\]]*\]/g, ' ').replace(/\([^)]*\)/g, ' ');
+    t = t.split(/\s+/).filter(w => w && !QUALITY_TOKENS.has(w.toLowerCase())).join(' ');
+    t = t.replace(/\b(19|20)\d{2}\b/g, ' ').replace(/\s+/g, ' ').trim();
+    return t;
+}
+
+export interface TmdbMeta {
+    overview: string; poster: string | null; background: string | null;
+    rating: string | null; genres: string[]; year: string | null;
+    cast: string[]; imdb: string | null; runtime: string | null;
+}
+
+const tmdbMetaCache = new Map<string, { data: TmdbMeta | null; ts: number }>();
+const TMDB_META_TTL = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Search TMDB by title (pt-BR) and return rich metadata (overview, cast, rating,
+ * poster, IMDB id, genres, year). Used to fill gaps where the IPTV provider has
+ * no description/IMDB. Cached 7 days. type = 'movie' | 'tv'.
+ */
+export async function fetchTmdbMeta(
+    apiKey: string | null | undefined,
+    title: string,
+    year: string | null | undefined,
+    type: 'movie' | 'tv'
+): Promise<TmdbMeta | null> {
+    if (!apiKey || !title) return null;
+    const clean = cleanForSearch(title);
+    if (!clean) return null;
+    const key = type + '|' + normalizeTitle(clean) + '|' + (year || '');
+    const c = tmdbMetaCache.get(key);
+    if (c && Date.now() - c.ts < TMDB_META_TTL) return c.data;
+
+    let data: TmdbMeta | null = null;
+    try {
+        const yp = year ? (type === 'movie' ? `&year=${year}` : `&first_air_date_year=${year}`) : '';
+        const surl = `https://api.themoviedb.org/3/search/${type}?api_key=${encodeURIComponent(apiKey)}` +
+            `&language=pt-BR&include_adult=false&query=${encodeURIComponent(clean)}${yp}`;
+        const sres = await fetch(surl);
+        if (sres.ok) {
+            const sj: any = await sres.json();
+            const hit = sj.results && sj.results[0];
+            if (hit) {
+                const durl = `https://api.themoviedb.org/3/${type}/${hit.id}?api_key=${encodeURIComponent(apiKey)}` +
+                    `&language=pt-BR&append_to_response=credits,external_ids`;
+                const dres = await fetch(durl);
+                if (dres.ok) {
+                    const d: any = await dres.json();
+                    data = {
+                        overview: d.overview || hit.overview || '',
+                        poster: d.poster_path ? `https://image.tmdb.org/t/p/w500${d.poster_path}` : null,
+                        background: d.backdrop_path ? `https://image.tmdb.org/t/p/w1280${d.backdrop_path}` : null,
+                        rating: (typeof d.vote_average === 'number' && d.vote_average > 0) ? d.vote_average.toFixed(1) : null,
+                        genres: Array.isArray(d.genres) ? d.genres.map((g: any) => g.name) : [],
+                        year: (d.release_date || d.first_air_date || '').slice(0, 4) || null,
+                        cast: (d.credits && Array.isArray(d.credits.cast)) ? d.credits.cast.slice(0, 10).map((x: any) => x.name) : [],
+                        imdb: (d.external_ids && d.external_ids.imdb_id) || null,
+                        runtime: d.runtime ? `${d.runtime} min` : null,
+                    };
+                }
+            }
+        }
+    } catch {
+        data = null;
+    }
+    tmdbMetaCache.set(key, { data, ts: Date.now() });
+    return data;
+}

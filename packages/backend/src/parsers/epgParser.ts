@@ -47,7 +47,9 @@ export async function parseEPG(content: string, log?: ReturnType<typeof makeLogg
                 epgData[ch] = epgData[ch].filter(p => {
                     const startTime = p.start;
                     if (startTime > nowTime) {
-                        if (futureCount >= 5) return false;
+                        // Keep enough future entries to cover several days (powers the
+                        // "Futebol - Jogos" catalog); EPG is small so RAM cost is tiny.
+                        if (futureCount >= 60) return false;
                         futureCount++;
                     }
                     return true;

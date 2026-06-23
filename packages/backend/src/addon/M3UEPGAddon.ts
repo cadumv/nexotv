@@ -7,7 +7,7 @@ import env from '../config/env';
 import * as xtreamProvider from '../providers/xtreamProvider';
 import * as iptvOrgProvider from '../providers/iptvOrgProvider';
 import * as m3uProvider from '../providers/m3uProvider';
-import { normalizeTitle, resolveImdbTitle, resolveTmdbTitles } from '../utils/titleMatch';
+import { normalizeTitle, resolveImdbTitle, resolveTmdbTitles, fetchTmdbMeta } from '../utils/titleMatch';
 
 const CACHE_ENABLED = env.CACHE_ENABLED;
 const CACHE_TTL_MS = env.CACHE_TTL_MS;
@@ -121,6 +121,8 @@ export class M3UEPGAddon {
     constructor(config: AddonConfig = {}, manifestRef?: any) {
         this.providerName = config.provider || 'xtream';
         this.config = config;
+        // Always pull EPG so the "⚽ Futebol - Jogos" catalog (built from the guide) works.
+        this.config.enableEpg = true;
         this.manifestRef = manifestRef;
         this.cacheKey = createCacheKey(config);
         this.idPrefix = this.cacheKey.slice(0, 8);
@@ -165,9 +167,9 @@ export class M3UEPGAddon {
         if (Math.abs(this.config.epgOffsetHours as number) > 48)
             this.config.epgOffsetHours = 0;
 
-        if (this.providerName === 'iptv-org' || this.providerName === 'm3u') {
-            this.config.reformatLogos = true;
-        }
+        // Always normalize channel logos (wsrv, fit=contain → square, letterboxed)
+        // so non-square logos don't get stretched/distorted in the square tile.
+        this.config.reformatLogos = true;
 
         this.log.debug('Addon instance created', {
             provider: this.providerName,
@@ -299,7 +301,28 @@ export class M3UEPGAddon {
     // (e.g. "Séries" shows as "SÃ©ries"). Strip diacritics for the DISPLAY name
     // only — the catalog id keeps the original category so item filtering still works.
     static stripAccents(s: string) {
-        return s.normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '');
+        // nodejs-mobile ships without full ICU, so String.normalize('NFD') is a
+        // no-op there (accents are NOT decomposed) and the old NFD+combining-mark
+        // approach silently left accents in — which Stremio Android then renders
+        // as "�". Use an explicit map so it works regardless of ICU.
+        if (!s) return s;
+        const MAP: Record<string, string> = {
+            'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
+            'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+            'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+            'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+            'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+            'ç': 'c', 'ñ': 'n', 'ý': 'y', 'ÿ': 'y',
+            'Á': 'A', 'À': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A',
+            'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
+            'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I',
+            'Ó': 'O', 'Ò': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O',
+            'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U',
+            'Ç': 'C', 'Ñ': 'N',
+        };
+        let out = '';
+        for (const ch of s) out += (MAP[ch] !== undefined ? MAP[ch] : ch);
+        return out;
     }
 
     // Expose every provider category as its own Stremio catalog (one row each),
@@ -307,7 +330,7 @@ export class M3UEPGAddon {
     // category catalogs before re-appending so repeated builds don't duplicate.
     _appendCategoryCatalogs() {
         if (!this.manifestRef) return;
-        const BASE = new Set(['iptv_channels', 'nexotv_vod', 'nexotv_series']);
+        const BASE = new Set(['nexotv_games', 'iptv_channels', 'nexotv_vod', 'nexotv_series']);
         // The manifest's `catalogs` property is read-only (cannot reassign), so
         // mutate the array in place: strip previously-added category catalogs.
         const catalogs = this.manifestRef.catalogs;
@@ -446,14 +469,14 @@ export class M3UEPGAddon {
         if (logoAttr && logoAttr.trim()) {
             finalUrl = logoAttr;
         } else {
-            finalUrl = `https://placehold.co/250x375/2b2b2b/FFFFFF.png?text=${encodeURIComponent(item.name || 'TV')}`;
+            finalUrl = `https://placehold.co/320x320/2b2b2b/FFFFFF.png?text=${encodeURIComponent(item.name || 'TV')}`;
         }
 
         if (this.config.reformatLogos && finalUrl.startsWith('http') && !finalUrl.includes('wsrv.nl') && !finalUrl.includes('placehold.co')) {
             if (finalUrl.includes('imgur.com')) {
                 finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
             }
-            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=250&h=375&fit=contain&we&bg=2b2b2b`;
+            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&bg=2b2b2b`;
         }
         return finalUrl;
     }
@@ -467,11 +490,274 @@ export class M3UEPGAddon {
             description: '📡 Live Channel',
             poster: logoUrl,
             background: logoUrl,
-            posterShape: 'poster',
+            posterShape: 'square',
             genres: item.category
                 ? [item.category]
                 : (item.attributes?.['group-title'] ? [item.attributes['group-title']] : ['Live TV']),
             runtime: 'Live'
+        };
+    }
+
+    // ---------- ⚽ Próximos Jogos (futebol, via EPG) ----------
+
+    // Title looks like a football match ("Time A x Time B"), excluding other sports.
+    _isFootballMatch(title: string) {
+        if (!title) return false;
+        const t = title.toLowerCase().trim();
+        if (!/ x /.test(t)) return false; // "Time x Time"
+        // Replays / reruns / highlights — not upcoming games.
+        if (/^vt\s*-?\s/.test(t)) return false;
+        const REPLAY = ['reprise', 'compacto', 'melhores momentos', 'best of', '(r)', 'replay', 'gols de', 'resenha'];
+        for (const r of REPLAY) if (t.includes(r)) return false;
+        // Other sports.
+        const EXCLUDE = [
+            'mlb', 'nba', 'nfl', 'nhl', 'ufc', 'boxe', 'boxing', 'luta', 'mma', 'knockout',
+            'tênis', 'tenis', 'tennis', 'vôlei', 'volei', 'basquete', 'f1', 'fórmula',
+            'formula', 'nascar', 'beisebol', 'hóquei', 'hoquei', 'wwe', 'golfe', 'atletismo',
+            'e-sports', 'esports', 'league of legends', 'valorant', 'counter'
+        ];
+        for (const e of EXCLUDE) if (t.includes(e)) return false;
+        return true;
+    }
+
+    // Only count matches on channels that actually carry football, to avoid false
+    // positives like "Spy x Family" (anime) or "Século X X I" (show).
+    _isSportsChannel(ch: any) {
+        const s = ((ch.name || '') + ' ' + (ch.category || '') + ' ' + (ch.attributes?.['group-title'] || '')).toLowerCase();
+        const KW = ['esporte', 'sport', 'espn', 'sportv', 'premiere', 'dazn', 'combate',
+            'goat', 'caze', 'cazé', 'futebol', 'eurosport', 'tnt', 'fox sport', 'nsports',
+            'globo', 'record', 'sbt', 'band', 'rede tv', 'cnt', 'tv brasil', 'desimpedido'];
+        return KW.some(k => s.includes(k));
+    }
+
+    // Rank a channel by broadcast quality (from its name), so the best variant
+    // (4K/FHD) is offered first and used for the tile.
+    _channelQualityRank(ch: any) {
+        const n = (ch?.name || '').toUpperCase();
+        if (/\b(4K|UHD)\b/.test(n)) return 4;
+        if (/\bFHD\b/.test(n)) return 3;
+        if (/\bHD\b/.test(n)) return 2;
+        if (/\bSD\b/.test(n)) return 1;
+        return 0;
+    }
+
+    // Major broadcasters, in display priority order. Used to (a) collapse the
+    // dozens of regional affiliates that carry the same national feed (every
+    // "GLOBO TV <city>" → one "GLOBO") and (b) order the broadcasters sensibly.
+    static GAME_BROADCASTERS = [
+        'SPORTV', 'PREMIERE', 'PREMIER', 'ESPN', 'TNT SPORTS', 'TNT', 'SPACE', 'DAZN',
+        'CAZE', 'CAZÉ', 'NSPORTS', 'N SPORTS', 'EUROSPORT', 'GOAT', 'DISNEY', 'STAR',
+        'PARAMOUNT', 'GLOBO', 'SBT', 'RECORD', 'BAND', 'REDE TV', 'CNT', 'TV BRASIL',
+    ];
+
+    _gameStationKey(name: string) {
+        const clean = (name || '').replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
+        for (const b of M3UEPGAddon.GAME_BROADCASTERS) if (clean.includes(b)) return b;
+        return clean;
+    }
+
+    // Collapse a match's channel list down to one entry per broadcaster per
+    // quality tier (so regional affiliates don't flood the list with 100+
+    // identical streams), ordered by broadcaster priority then quality.
+    _dedupGameChannels(channels: any[], cap = 15) {
+        const byStation = new Map<string, any[]>();
+        for (const c of channels) {
+            const k = this._gameStationKey(c.name || '');
+            if (!byStation.has(k)) byStation.set(k, []);
+            byStation.get(k)!.push(c);
+        }
+        const pickedPerStation: { key: string; chans: any[] }[] = [];
+        for (const [key, list] of byStation) {
+            list.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
+            const seenTier = new Set<number>();
+            const chans: any[] = [];
+            for (const c of list) {
+                const tier = this._channelQualityRank(c);
+                if (seenTier.has(tier)) continue;   // one channel per quality tier
+                seenTier.add(tier);
+                chans.push(c);
+            }
+            pickedPerStation.push({ key, chans });
+        }
+        // Order: known broadcasters by priority, then the rest alphabetically.
+        const prio = (k: string) => {
+            const i = M3UEPGAddon.GAME_BROADCASTERS.indexOf(k);
+            return i === -1 ? 999 : i;
+        };
+        pickedPerStation.sort((a, b) => prio(a.key) - prio(b.key) || a.key.localeCompare(b.key));
+        const out: any[] = [];
+        for (const s of pickedPerStation) {
+            for (const c of s.chans) { out.push(c); if (out.length >= cap) return out; }
+        }
+        return out;
+    }
+
+    async getGamesForCatalog() {
+        await this.ensureDataLoaded();
+        await this.ensureEpgLoaded();
+        if (!this.epgData || Object.keys(this.epgData).length === 0) return [];
+
+        // One EPG id (tvg-id) is usually shared by several physical channels —
+        // the SD, HD and FHD variants of the same station. Map each EPG id to ALL
+        // of them so a match can offer every quality, not just the first one.
+        const chByEpg = new Map<string, any[]>();
+        for (const c of this.channels) {
+            const epgId = c.attributes?.['tvg-id'] || c.epg_channel_id;
+            if (!epgId) continue;
+            if (!chByEpg.has(epgId)) chByEpg.set(epgId, []);
+            chByEpg.get(epgId)!.push(c);
+        }
+
+        const now = Date.now();
+        const minStart = now - 2 * 3600 * 1000;          // jogos em andamento (até 2h atrás)
+        const horizon = now + 5 * 24 * 3600 * 1000;      // hoje + ~5 dias
+        // Group the same match (across SD/HD/FHD channels AND across stations) into
+        // a single entry that carries every channel that broadcasts it.
+        const groups = new Map<string, { title: string; start: number; stop: number; chans: Map<string, any> }>();
+        for (const [epgId, progs] of Object.entries(this.epgData)) {
+            const chans = (chByEpg.get(epgId) || []).filter(c => this._isSportsChannel(c));
+            if (chans.length === 0) continue;
+            for (const p of (progs as any[])) {
+                if (!p || p.start < minStart || p.start > horizon) continue;
+                const title = (p.title || '').trim();
+                if (!this._isFootballMatch(title)) continue;
+                const norm = title.toLowerCase().replace(/\s*-?\s*ao vivo/i, '').replace(/\s+/g, ' ').trim();
+                const d = new Date(p.start);
+                const key = `${norm}|${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+                if (!groups.has(key)) groups.set(key, { title, start: p.start, stop: p.stop || 0, chans: new Map() });
+                const g = groups.get(key)!;
+                if (p.start < g.start) g.start = p.start;
+                if ((p.stop || 0) > g.stop) g.stop = p.stop || 0;
+                for (const c of chans) if (!g.chans.has(c.id)) g.chans.set(c.id, c);
+            }
+        }
+        const out: any[] = [];
+        for (const g of groups.values()) {
+            const channels = this._dedupGameChannels([...g.chans.values()]);
+            out.push({ title: g.title, start: g.start, stop: g.stop, channels });
+        }
+        // Live matches first (most useful right now), then by kickoff time.
+        out.sort((a, b) => (this._isGameLive(b, now) ? 1 : 0) - (this._isGameLive(a, now) ? 1 : 0) || a.start - b.start);
+        return out;
+    }
+
+    // A game tile must have a UNIQUE id (several games air on the same channel —
+    // reusing the channel id makes Stremio dedup them down to one tile and the
+    // meta page shows the channel, not the match). We encode the match details
+    // into a self-contained id so meta/stream can resolve back without state.
+    // A match counts as live now if we're between its start and stop. When the
+    // guide has no stop, assume a ~2.5h window from kickoff.
+    _isGameLive(g: { start: number; stop?: number }, now = Date.now()) {
+        if (!g || !g.start) return false;
+        const end = g.stop && g.stop > g.start ? g.stop : g.start + 2.5 * 3600 * 1000;
+        return now >= g.start && now <= end;
+    }
+
+    // The tile image shows the MATCH (team names + status) instead of a provider
+    // logo, so every game looks distinct. placehold.co renders the text server-
+    // side, so accents are safe here (it's a rasterized image, not Stremio text).
+    // Live games get a red banner; upcoming ones a dark-green pitch tone.
+    _gameTileImage(matchName: string, statusLine: string, live: boolean) {
+        const bg = live ? 'b3261e' : '14532d';
+        const text = encodeURIComponent(`${matchName}\n${statusLine}`);
+        return `https://placehold.co/640x360/${bg}/FFFFFF.png?text=${text}&font=oswald`;
+    }
+
+    _encodeGameId(g: any) {
+        const payload = JSON.stringify({ cs: (g.channels || []).map((c: any) => c.id), s: g.start, e: g.stop || 0, n: g.title });
+        const b64 = Buffer.from(payload, 'utf8').toString('base64')
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        return `game${this.idPrefix}_${b64}`;
+    }
+
+    _decodeGameId(id: string): { cs: string[]; s: number; e?: number; n: string } | null {
+        try {
+            const b64 = id.slice(`game${this.idPrefix}_`.length).replace(/-/g, '+').replace(/_/g, '/');
+            const o = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+            // Back-compat with the earlier single-channel encoding ({ c }).
+            if (o && !o.cs && o.c) o.cs = [o.c];
+            return o;
+        } catch { return null; }
+    }
+
+    // A square channel logo stretched into a landscape tile looks awful, so build
+    // a 16:9 image with the logo contained on a dark background (no distortion).
+    _gameLandscapeImage(channel: any, matchName: string) {
+        const raw = channel.attributes?.['tvg-logo'] || channel.logo || '';
+        if (raw && raw.startsWith('http')) {
+            let u = raw;
+            if (u.includes('imgur.com')) u = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(u)}`;
+            return `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=640&h=360&fit=contain&we&bg=0b0b0b`;
+        }
+        return `https://placehold.co/640x360/0b0b0b/FFFFFF.png?text=${encodeURIComponent(matchName)}`;
+    }
+
+    _gameDayLabel(d: Date) {
+        const now = new Date();
+        const tomorrow = new Date(now.getTime() + 86400000);
+        if (d.toDateString() === now.toDateString()) return 'Hoje';
+        if (d.toDateString() === tomorrow.toDateString()) return 'Amanha';
+        return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    generateGamePreview(g: any) {
+        const d = new Date(g.start);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const dayLabel = this._gameDayLabel(d);
+        const primary = (g.channels && g.channels[0]) || {};
+        const matchName = g.title.replace(/\s*-?\s*ao vivo/i, '').trim();
+        const live = this._isGameLive(g);
+        // The image keeps accents (rendered server-side); the time line on it.
+        const img = this._gameTileImage(matchName, live ? 'AO VIVO AGORA' : `${dayLabel} ${hh}:${mm}`, live);
+        const n = (g.channels || []).length;
+        const opts = n > 1 ? `${n} transmissoes` : M3UEPGAddon.stripAccents(primary.name || '');
+        const safeMatch = M3UEPGAddon.stripAccents(matchName);
+        const when = live ? 'AO VIVO' : `${dayLabel} ${hh}:${mm}`;
+        return {
+            id: this._encodeGameId(g),
+            type: 'tv',
+            // Signal live in the title too, so it stands out in the grid.
+            name: live ? `[AO VIVO] ${safeMatch}` : safeMatch,
+            poster: img,
+            background: img,
+            posterShape: 'landscape',
+            // No emoji/non-ASCII: Stremio Android mis-renders multibyte UTF-8.
+            description: `${when} - ${opts}`,
+            // releaseInfo renders as the subtitle line under the tile in the grid,
+            // so the status/options show *before* opening the match.
+            releaseInfo: `${when} - ${opts}`,
+            genres: [M3UEPGAddon.stripAccents(primary.name || '')].filter(Boolean)
+        };
+    }
+
+    // Build the detail (meta) page for a game tile, resolving all its channels.
+    _getGameMeta(id: string) {
+        const info = this._decodeGameId(id);
+        if (!info) return null;
+        const channels = (info.cs || []).map(cid => this.channelMap.get(cid)).filter(Boolean);
+        const d = new Date(info.s);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const dayLabel = this._gameDayLabel(d);
+        const rawMatch = info.n.replace(/\s*-?\s*ao vivo/i, '').trim();
+        const matchName = M3UEPGAddon.stripAccents(rawMatch);
+        const live = this._isGameLive({ start: info.s, stop: info.e });
+        const img = this._gameTileImage(rawMatch, live ? 'AO VIVO AGORA' : `${dayLabel} ${hh}:${mm}`, live);
+        const chList = channels.length
+            ? channels.map((c: any) => `- ${M3UEPGAddon.stripAccents(c.name)}`).join('\n')
+            : '- (canal indisponivel)';
+        const statusLine = live ? '*** AO VIVO AGORA ***' : `${dayLabel} as ${hh}:${mm}`;
+        return {
+            id,
+            type: 'tv',
+            name: live ? `[AO VIVO] ${matchName}` : matchName,
+            poster: img,
+            background: img,
+            posterShape: 'landscape',
+            releaseInfo: live ? 'AO VIVO' : `${dayLabel} ${hh}:${mm}`,
+            description: `${matchName}\n\n${statusLine}\n\nTransmissoes (escolha a qualidade ao assistir):\n${chList}`,
+            genres: channels.map((c: any) => M3UEPGAddon.stripAccents(c.name)).filter(Boolean)
         };
     }
 
@@ -491,6 +777,8 @@ export class M3UEPGAddon {
             posterShape: 'poster',
             releaseInfo: m.year || undefined,
             imdbRating: m.rating || undefined,
+            // Shown in the focused-item preview pane before opening the detail page.
+            description: (m.plot && String(m.plot).trim()) || undefined,
             genres: m.category ? [m.category] : undefined,
         };
     }
@@ -504,6 +792,8 @@ export class M3UEPGAddon {
             posterShape: 'poster',
             releaseInfo: s.year || undefined,
             imdbRating: s.rating || undefined,
+            // Series lists from Xtream usually include a plot — show it on focus.
+            description: (s.plot && String(s.plot).trim()) || undefined,
             genres: s.category ? [s.category] : undefined,
         };
     }
@@ -658,22 +948,35 @@ export class M3UEPGAddon {
             info = await xtreamProvider.fetchVodInfo(this.config, m.streamId);
             if (info) this.vodInfoCache.set(id, { data: info, ts: Date.now() });
         }
-        const cast = info?.cast ? String(info.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined;
+        let cast = info?.cast ? String(info.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined;
         const backdrop = Array.isArray(info?.backdrop_path) ? info.backdrop_path[0] : undefined;
+        let description = info?.plot || info?.description || '';
+
+        // Enrich from TMDB (pt-BR) — fills the many titles the provider leaves blank.
+        let tmdb: any = null;
+        try { tmdb = await fetchTmdbMeta(env.TMDB_API_KEY, m.name, m.year, 'movie'); } catch { /* ignore */ }
+        if (tmdb) {
+            if (!description) description = tmdb.overview || '';
+            if (!cast || !cast.length) cast = tmdb.cast && tmdb.cast.length ? tmdb.cast : cast;
+        }
+
+        const poster = this._posterOrPlaceholder(m.poster || tmdb?.poster, m.name);
+        const links = tmdb?.imdb ? [{ name: 'IMDb', category: 'imdb', url: `https://www.imdb.com/title/${tmdb.imdb}` }] : undefined;
         return {
             id: m.id,
             type: 'movie',
             name: m.name,
-            poster: this._posterOrPlaceholder(m.poster, m.name),
+            poster,
             posterShape: 'poster',
-            background: backdrop || m.poster,
-            description: info?.plot || info?.description || '',
-            releaseInfo: m.year || info?.releasedate || undefined,
-            imdbRating: m.rating || info?.rating || undefined,
-            genres: m.category ? [m.category] : (info?.genre ? [info.genre] : undefined),
-            runtime: info?.duration || undefined,
+            background: backdrop || tmdb?.background || m.poster || tmdb?.poster,
+            description,
+            releaseInfo: m.year || info?.releasedate || tmdb?.year || undefined,
+            imdbRating: m.rating || info?.rating || tmdb?.rating || undefined,
+            genres: m.category ? [m.category] : (info?.genre ? [info.genre] : (tmdb?.genres?.length ? tmdb.genres : undefined)),
+            runtime: info?.duration || tmdb?.runtime || undefined,
             cast,
             director: info?.director || undefined,
+            links,
         };
     }
 
@@ -709,19 +1012,31 @@ export class M3UEPGAddon {
         }
         videos.sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
         const backdrop = Array.isArray(data?.info?.backdrop_path) ? data.info.backdrop_path[0] : undefined;
+        let description = s.plot || data?.info?.plot || '';
+        let cast = s.cast ? String(s.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined;
+
+        // Enrich from TMDB (pt-BR) for series missing description/IMDB from the provider.
+        let tmdb: any = null;
+        try { tmdb = await fetchTmdbMeta(env.TMDB_API_KEY, s.name, s.year, 'tv'); } catch { /* ignore */ }
+        if (tmdb) {
+            if (!description) description = tmdb.overview || '';
+            if (!cast || !cast.length) cast = tmdb.cast && tmdb.cast.length ? tmdb.cast : cast;
+        }
+        const links = tmdb?.imdb ? [{ name: 'IMDb', category: 'imdb', url: `https://www.imdb.com/title/${tmdb.imdb}` }] : undefined;
         return {
             id: s.id,
             type: 'series',
             name: s.name,
-            poster: this._posterOrPlaceholder(s.poster, s.name),
+            poster: this._posterOrPlaceholder(s.poster || tmdb?.poster, s.name),
             posterShape: 'poster',
-            background: backdrop || s.poster,
-            description: s.plot || data?.info?.plot || '',
-            releaseInfo: s.year || undefined,
-            imdbRating: s.rating || data?.info?.rating || undefined,
-            genres: s.category ? [s.category] : (s.genre ? [s.genre] : undefined),
-            cast: s.cast ? String(s.cast).split(',').map((x: string) => x.trim()).filter(Boolean) : undefined,
+            background: backdrop || tmdb?.background || s.poster,
+            description,
+            releaseInfo: s.year || tmdb?.year || undefined,
+            imdbRating: s.rating || data?.info?.rating || tmdb?.rating || undefined,
+            genres: s.category ? [s.category] : (s.genre ? [s.genre] : (tmdb?.genres?.length ? tmdb.genres : undefined)),
+            cast,
             director: s.director || undefined,
+            links,
             videos,
         };
     }
@@ -766,6 +1081,18 @@ export class M3UEPGAddon {
             }
             return this.getMovieStreamsByImdb(parts[0]);
         }
+        if (id.startsWith(`game${this.idPrefix}_`)) {
+            const info = this._decodeGameId(id);
+            if (!info?.cs?.length) return [];
+            // Offer every channel that carries the match (FHD/HD/SD) as a stream,
+            // best quality first (ids were encoded already sorted by quality).
+            const all: any[] = [];
+            for (const cid of info.cs) {
+                const ss = await this.getStreams(cid);
+                for (const s of ss) all.push(s);
+            }
+            return all;
+        }
         if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieStreams(id);
         if (id.startsWith(`epi${this.idPrefix}_`)) return this.getEpisodeStreams(id);
         const item = this.channelMap.get(id);
@@ -804,6 +1131,7 @@ export class M3UEPGAddon {
         // IMDB ids are owned by Cinemeta — don't provide meta, only streams.
         if (id.startsWith('tt')) return null;
         await this.ensureDataLoaded();
+        if (id.startsWith(`game${this.idPrefix}_`)) { await this.ensureEpgLoaded(); return this._getGameMeta(id); }
         if (id.startsWith(`vod${this.idPrefix}_`)) return this.getMovieMeta(id);
         if (id.startsWith(`ser${this.idPrefix}_`)) return this.getSeriesMeta(id);
         await this.ensureEpgLoaded();
@@ -812,17 +1140,21 @@ export class M3UEPGAddon {
         const epgId = item.attributes?.['tvg-id'] || item.attributes?.['tvg-name'];
         const current = getCurrentProgram(this.epgData, epgId, this.config.epgOffsetHours as number);
         const upcoming = getUpcomingPrograms(this.epgData, epgId, 3, this.config.epgOffsetHours as number);
-        let description = `📺 CHANNEL: ${item.name}`;
+        // nodejs-mobile lacks full ICU, so toLocaleTimeString is unreliable — format manually.
+        const hhmm = (dt: any) => dt ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : '';
+        const sa = M3UEPGAddon.stripAccents;
+        // No emoji / non-ASCII: Stremio Android mis-renders multibyte UTF-8.
+        let description = sa(item.name);
         if (current) {
-            const start = current.startTime?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || '';
-            const end = current.stopTime?.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || '';
-            description += `\n\n📡 NOW: ${current.title}${start && end ? ` (${start}-${end})` : ''}`;
-            if (current.description) description += `\n\n${current.description}`;
+            const start = hhmm(current.startTime);
+            const end = hhmm(current.stopTime);
+            description += `\n\nAGORA: ${sa(current.title)}${start && end ? ` (${start}-${end})` : ''}`;
+            if (current.description) description += `\n\n${sa(current.description)}`;
         }
         if (upcoming.length) {
-            description += '\n\n📅 UPCOMING:\n';
+            description += '\n\nA SEGUIR:\n';
             for (const p of upcoming) {
-                description += `${p.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${p.title}\n`;
+                description += `${hhmm(p.startTime)} - ${sa(p.title)}\n`;
             }
         }
         const logoUrl = this.deriveFallbackLogoUrl(item);
@@ -832,7 +1164,7 @@ export class M3UEPGAddon {
             name: item.name,
             poster: logoUrl,
             background: logoUrl,
-            posterShape: 'poster',
+            posterShape: 'square',
             description,
             genres: item.category
                 ? [item.category]

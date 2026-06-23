@@ -10,6 +10,12 @@ async function createAddon(config: AddonConfig) {
     config.instanceId = config.instanceId ||
         (crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(8).toString('hex'));
 
+    // The addon instance forces enableEpg=true before computing its cacheKey
+    // (EPG powers the games catalog + programming). Apply the same here so the
+    // manifest's idPrefixes match the catalog/meta/stream id prefixes — otherwise
+    // Stremio gets a different idPrefix than the tiles and clicks resolve nowhere.
+    config.enableEpg = true;
+
     const cacheKey = createCacheKey(config);
     const idPrefix = cacheKey.slice(0, 8);
     const manifest = createManifest(idPrefix, config.catalogName);
@@ -69,7 +75,10 @@ async function createAddon(config: AddonConfig) {
 
                 let items: any[] = [];
                 let toMeta: (i: any) => any;
-                if (args.type === 'movie' && baseId === 'nexotv_vod') {
+                if (args.type === 'tv' && args.id === 'nexotv_games') {
+                    items = await addonInstance.getGamesForCatalog();
+                    toMeta = (i: any) => addonInstance.generateGamePreview(i);
+                } else if (args.type === 'movie' && baseId === 'nexotv_vod') {
                     items = await addonInstance.getMoviesForCatalog();
                     toMeta = (i: any) => addonInstance.generateMoviePreview(i);
                 } else if (args.type === 'series' && baseId === 'nexotv_series') {

@@ -11,6 +11,15 @@ export function createManifest(idPrefix?: string, catalogName?: string) {
         catalogs: [
             {
                 type: 'tv',
+                id: 'nexotv_games',
+                name: 'Futebol Ao Vivo',
+                extra: [
+                    { name: 'skip' }
+                ],
+                genres: []
+            },
+            {
+                type: 'tv',
                 id: 'iptv_channels',
                 name: catalogName || env.ADDON_NAME,
                 extra: [
@@ -46,8 +55,8 @@ export function createManifest(idPrefix?: string, catalogName?: string) {
         // 'tt' lets Stremio route IMDB stream requests (from Cinemeta home/search)
         // to us, so IPTV shows up as a source on the standard movie/series pages.
         idPrefixes: idPrefix
-            ? ['tt', `xc${idPrefix}_`, `vod${idPrefix}_`, `ser${idPrefix}_`, `epi${idPrefix}_`, `io${idPrefix}_`, `m3${idPrefix}_`]
-            : ['tt', 'xc', 'vod', 'ser', 'epi', 'io', 'm3'],
+            ? ['tt', `xc${idPrefix}_`, `vod${idPrefix}_`, `ser${idPrefix}_`, `epi${idPrefix}_`, `io${idPrefix}_`, `m3${idPrefix}_`, `game${idPrefix}_`]
+            : ['tt', 'xc', 'vod', 'ser', 'epi', 'io', 'm3', 'game'],
         behaviorHints: {
             configurable: true,
             configurationRequired: true

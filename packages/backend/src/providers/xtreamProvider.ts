@@ -120,6 +120,10 @@ export async function fetchData(addonInstance: any) {
                     poster: m.stream_icon,
                     year: m.year,
                     rating: m.rating,
+                    // Some Xtream panels include a short plot/description in the
+                    // VOD list; capture it so the catalog preview can show it on
+                    // focus (full plot still comes from get_vod_info on click).
+                    plot: m.plot || m.description || m.overview || '',
                     category: vodCatMap[m.category_id] || m.category_name || 'Filmes',
                     ext: (m.container_extension || 'mp4').replace(/^\./, ''),
                     added: m.added,
