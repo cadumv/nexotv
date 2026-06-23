@@ -1,17 +1,20 @@
-# NexoTV — Roadmap do App (continuidade entre chats)
+# RAJADA — Roadmap do App (continuidade entre chats)
 
 > **Use este arquivo para retomar o projeto em qualquer chat.** Ele resume a
 > visão, a arquitetura decidida, o que JÁ foi feito, o que está em ANDAMENTO e
 > o que falta. Sem segredos aqui (este arquivo vai pro GitHub público).
 
+> **Marca do app: RAJADA.** "NexoTV" segue só como nome interno do código/repo/
+> servidor por enquanto (renomeio depois se quiser); a cara pro usuário é **RAJADA**.
+
 ---
 
 ## 🎯 Visão
 Transformar o setup atual (IPTV + Stremio + servidor NexoTV) em **um app próprio
-estilo Netflix**, instalável como **app nativo (APK e equivalentes)** em **todas
-as TVs que permitem instalar**, além de celular e notebook. Base: Stremio
-(open source) + nossa lógica (catálogos IPTV, Futebol/Sofascore, enriquecimento
-TMDB).
+estilo Netflix chamado RAJADA**, instalável como **app nativo (APK e equivalentes)**
+em **todas as TVs que permitem instalar**, além de celular e notebook. Base:
+Stremio (open source) + nossa lógica (catálogos IPTV, Futebol/Sofascore,
+enriquecimento TMDB).
 
 ## 🧭 Decisões de arquitetura (FECHADAS)
 1. **Base de UI:** fork do **stremio-web** (React, open source) → redesenho Netflix.
