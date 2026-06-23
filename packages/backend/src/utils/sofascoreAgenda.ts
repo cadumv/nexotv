@@ -79,6 +79,26 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R
  * we only serve cache and never hit the API — so idle periods cost zero requests.
  */
 export async function fetchSofascoreAgenda(allowNetwork = true): Promise<AgendaGame[]> {
+    // Relay mode: a central Worker already aggregated the agenda for all devices.
+    // One cheap GET, no RapidAPI key on the device, no quota concern → no gate.
+    if (env.SOFASCORE_AGENDA_URL) {
+        if (_cache && Date.now() - _cache.ts < Math.min(env.SOFASCORE_TTL_MS as number, 3600000)) return _cache.data;
+        try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 15000);
+            let resp: any;
+            try { resp = await fetch(env.SOFASCORE_AGENDA_URL as string, { signal: ctrl.signal }); }
+            finally { clearTimeout(timer); }
+            if (resp && resp.ok) {
+                const j: any = await resp.json();
+                const data: AgendaGame[] = Array.isArray(j?.games) ? j.games : [];
+                _cache = { ts: Date.now(), data };
+                return data;
+            }
+        } catch (e: any) { log.warn?.('[SOFASCORE] relay fetch failed', e?.message); }
+        return _cache?.data || [];
+    }
+
     const key = env.SOFASCORE_RAPIDAPI_KEY;
     if (!key) return [];
     if (_cache && Date.now() - _cache.ts < env.SOFASCORE_TTL_MS) return _cache.data;

@@ -37,6 +37,11 @@ const env = {
     // the IPTV EPG misses. Empty = agenda disabled (falls back to EPG-only games).
     SOFASCORE_RAPIDAPI_KEY: process.env.SOFASCORE_RAPIDAPI_KEY || null,
     SOFASCORE_RAPIDAPI_HOST: process.env.SOFASCORE_RAPIDAPI_HOST || 'sofascore.p.rapidapi.com',
+    // Preferred: a central relay (Cloudflare Worker /agenda?secret=…) that fetches
+    // Sofascore ONCE and serves every TV/account. Set this and the device needs no
+    // RapidAPI key — the quota is spent centrally, not per device. When set, it
+    // takes precedence over the direct RapidAPI key.
+    SOFASCORE_AGENDA_URL: process.env.SOFASCORE_AGENDA_URL || null,
     // Cache the aggregated agenda this long (protects the free-tier quota — only
     // 500 req/month; each refresh ≈ one request per channel). The schedule barely
     // changes intraday and the per-channel feed already spans the next few days,
