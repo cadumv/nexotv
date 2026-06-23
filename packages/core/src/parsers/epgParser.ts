@@ -1,10 +1,17 @@
-import xml2js from 'xml2js';
+import { XMLParser } from 'fast-xml-parser';
 
 /**
- * Parser de EPG (XMLTV), independente de servidor. Migrado de packages/backend
- * e desacoplado de `env`/`logger`: os limites vêm por parâmetro e o log é um
- * callback opcional.
+ * Parser de EPG (XMLTV), independente de servidor. Usa fast-xml-parser (puro JS,
+ * roda no Node E no browser/app — sem builtins do Node). Limites por parâmetro,
+ * log por callback opcional.
  */
+
+function pickText(v: any): string {
+    if (v == null) return '';
+    if (Array.isArray(v)) return pickText(v[0]);
+    if (typeof v === 'object') return v['#text'] != null ? String(v['#text']) : '';
+    return String(v);
+}
 
 export interface ParseEpgOptions {
     /** Tamanho máximo do conteúdo (bytes). Acima disso, retorna {}. Default 50 MB. */
@@ -39,29 +46,32 @@ export async function parseEPG(content: string, opts: ParseEpgOptions = {}) {
 
     const start = Date.now();
     try {
-        const parser = new xml2js.Parser();
-        const result = await parser.parseStringPromise(content);
+        const parser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: '@_',
+            textNodeName: '#text',
+            isArray: (name) => name === 'programme',
+        });
+        const result = parser.parse(content);
         const epgData: Record<string, any[]> = {};
-        if (result.tv && result.tv.programme) {
-            const cutoff = Date.now() - 3600 * 1000; // 1 hora atrás
-            const nowTime = Date.now();
-            let eventCount = 0;
-            for (const prog of result.tv.programme) {
-                if (++eventCount % 5000 === 0) {
-                    await new Promise<void>(resolve => setTimeout(resolve, 0));
-                }
-                const stopDate = parseEPGTime(prog.$.stop);
+        const programmes = result?.tv?.programme;
+        const nowTime = Date.now();
+        if (Array.isArray(programmes)) {
+            const cutoff = nowTime - 3600 * 1000; // 1 hora atrás
+            for (const prog of programmes) {
+                const stopDate = parseEPGTime(prog['@_stop']);
                 if (stopDate.getTime() < cutoff) continue;
 
-                const startDate = parseEPGTime(prog.$.start);
+                const startDate = parseEPGTime(prog['@_start']);
 
-                const ch = prog.$.channel;
+                const ch = prog['@_channel'];
+                if (!ch) continue;
                 if (!epgData[ch]) epgData[ch] = [];
                 epgData[ch].push({
                     start: startDate.getTime(),
                     stop: stopDate.getTime(),
-                    title: prog.title ? prog.title[0]._ || prog.title[0] : 'Unknown',
-                    desc: prog.desc ? prog.desc[0]._ || prog.desc[0] : ''
+                    title: pickText(prog.title) || 'Unknown',
+                    desc: pickText(prog.desc),
                 });
             }
 

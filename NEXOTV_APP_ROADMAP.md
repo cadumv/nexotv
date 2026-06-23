@@ -92,16 +92,14 @@ API do engine: `load()`, `getManifest()`, `getCatalog(args)`, `getMeta(type,id)`
 `engineHost.ts` (ponte app↔core, HTTP nativo/fetch), `App.tsx` (home Netflix MVP:
 setup IPTV + fileiras de catálogo), `capacitor.config.json` (com.rajada.app).
 
-**2 follow-ups pro build web/APK compilar (ver `packages/app/README.md`):**
-1. Resolver core no bundler — alias Vite `@nexotv/core` → `../core/src` (FEITO no
-   vite.config) + paths no tsconfig se precisar.
-2. **EPG no browser**: trocar `xml2js` (puxa builtins do Node) por
-   `fast-xml-parser`/`DOMParser` no `core/parsers/epgParser` (mesma saída).
-   Validado no Node com xml2js; falta a variante browser.
+**✅ Build web do app FUNCIONANDO** (`pnpm --filter @nexotv/app build:web` → dist/).
+- ✅ core resolvido no bundler (alias Vite `@nexotv/core` → `../core/src`).
+- ✅ EPG no browser: `core/parsers/epgParser` agora usa **fast-xml-parser** (roda
+  no Node E no browser; revalidado = mesmos 353 canais/28 jogos do xml2js).
 
 Depois:
 3. Redesign Netflix completo (usar skill artifact-design); player nativo (ExoPlayer).
-4. `npx cap add android` → `cap:sync` → APK; testar Fire TV/Google TV.
+4. `npx cap add android` → `cap:sync` → APK; testar Fire TV/Google TV (precisa SDK+device).
 5. Tizen/webOS a partir do mesmo código. Convergir backend→core (cleanup, opcional).
 
 ## 🗄️ Histórico — Fase 1 (core)
