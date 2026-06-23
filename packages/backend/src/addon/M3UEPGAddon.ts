@@ -619,6 +619,19 @@ export class M3UEPGAddon {
         return /^vt\b|reprise|replay|compacto|melhores momentos|\(r\)|gols de/.test(t);
     }
 
+    // The two teams of a "Team A x Team B" title, compacted (for cross-source match).
+    _teamTokens(title: string) {
+        return (title || '').split(/\s+x\s+/i).map(s => M3UEPGAddon._compact(s)).filter(t => t.length >= 3);
+    }
+
+    // Two games are the same match if a team name lines up (handles "Uzbequistao"
+    // ⇄ "Uzbekistan" via translation, and partials like "America-MG" ⇄ "America
+    // Mineiro" sharing the other team "Criciuma").
+    _teamsOverlap(a: string[], b: string[]) {
+        for (const x of a) for (const y of b) if (x === y || x.includes(y) || y.includes(x)) return true;
+        return false;
+    }
+
     // Base name of an IPTV channel: accent-free, lowercased, without [quality] tags
     // and bare quality words — for matching against Sofascore channel names.
     _iptvBase(name: string) {
@@ -779,7 +792,26 @@ export class M3UEPGAddon {
             // mismatch duplicates ("America-MG" vs "America Mineiro"). EPG stays the
             // fallback for idle windows / no key / quota exhausted.
             const sofaGames = await this._buildSofaGames(allowNetwork);
-            if (sofaGames.length) merged = sofaGames;
+            if (sofaGames.length) {
+                // Sofascore stays the LIST (clean names, no false positives), but its
+                // BR TV data can be incomplete (e.g. only CazeTV). Enrich each match
+                // with the channels the provider EPG also lists for it (union) — so a
+                // live game shows ALL providers carrying it, not just one. We only ADD
+                // channels; EPG-only games aren't appended (avoids name-variant dupes).
+                for (const sg of sofaGames) {
+                    const st = this._teamTokens(sg.title);
+                    for (const eg of epgOut) {
+                        if (Math.abs(sg.start - eg.start) > 3 * 3600 * 1000) continue;
+                        if (!this._teamsOverlap(st, this._teamTokens(eg.title))) continue;
+                        const ids = new Set(sg.channels.map((c: any) => c.id));
+                        for (const c of eg.channels) if (!ids.has(c.id)) sg.channels.push(c);
+                    }
+                    sg.channels = sg.channels
+                        .sort((a: any, b: any) => this._channelQualityRank(b) - this._channelQualityRank(a))
+                        .slice(0, 20);
+                }
+                merged = sofaGames;
+            }
         } catch (e: any) {
             this.log.warn?.('[GAMES] Sofascore agenda failed', e?.message);
         }
