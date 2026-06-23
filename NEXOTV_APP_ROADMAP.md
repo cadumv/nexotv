@@ -87,11 +87,23 @@ o backend pra importar do core é cleanup posterior.
 - `text/normalize` (`stripAccents` manual, `normalizeTitle`, `cleanForSearch`, `compact`)
 - `meta/titleMatch` (TMDB/Cinemeta via `HttpClient`, apiKey por parâmetro)
 - `agenda/sofascoreAgenda` (relay + direto via `HttpClient`)
+- `utils/md5` (md5 puro, **bate 100% com o crypto do Node** — verificado)
+- `config/cacheKey` (`createCacheKey` portável → **idPrefix idêntico ao server**:
+  conta atual = `b59c5679`, itens salvos continuam resolvendo) + `types` (AddonConfig)
+- `providers/xtreamProvider` (canais/VOD/séries/EPG via `HttpClient`, retorna dados;
+  + `fetchVodInfo`/`fetchSeriesInfo`)
 
-**Próximo no core:**
-1. `providers/*` (xtream/iptv-org/m3u) recebendo `HttpClient` + config
-2. `addon/M3UEPGAddon` (orquestra tudo) — recebe config + http + storage
-   (a peça grande; muito acoplada a env/sqlite/timers — migrar com cuidado)
+**Próximo no core — o ENGINE (`addon/M3UEPGAddon` → `engine/NexoEngine`):**
+A peça que orquestra tudo (catálogos/meta/stream, jogos, enriquecimento). Plano:
+- Construtor recebe **deps injetadas**: `{ http, config, options, storage?, log? }`
+  em vez de `env`/`fetch`/`sqlite` globais.
+- Trocar `env.X` → `options` (timeouts, page size, TTLs, flags rate-limit n/a).
+- Trocar `fetch`/providers → os do core (`fetchXtreamData`, `fetchVodInfo`…).
+- Trocar `crypto`/`createCacheKey` → `config/cacheKey` do core (já pronto).
+- `sqliteCache` → adapter `Storage` opcional (app usa memória/Storage do device).
+- Timers (`setInterval`) → opcionais; no app o engine roda sob demanda.
+- Reaproveita: parsers, titleMatch, sofascoreAgenda, text/normalize, lruCache.
+- ⚠️ Melhor portar COM o provedor no ar (testar paridade catálogos/meta/stream).
 
 ## 📋 A FAZER (fases do app)
 1. **Core** (em andamento): extrair `M3UEPGAddon`/parsers/`titleMatch`/

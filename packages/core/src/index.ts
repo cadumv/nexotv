@@ -36,3 +36,9 @@ export {
 export { type AddonConfig } from './types';
 export { createCacheKey, idPrefixFromCacheKey } from './config/cacheKey';
 export { md5 } from './utils/md5';
+
+// Provedores
+export {
+    fetchXtreamData, fetchVodInfo, fetchSeriesInfo,
+    type XtreamOpts, type XtreamData,
+} from './providers/xtreamProvider';
