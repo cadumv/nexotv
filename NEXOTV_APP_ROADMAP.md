@@ -74,10 +74,23 @@ enriquecimento TMDB).
 
 ---
 
-## 🔄 EM ANDAMENTO
-- **Fase 1 do app**: extrair a lógica reaproveitável do backend para um módulo
-  **`packages/core`** independente de servidor, com uma **camada de HTTP trocável**
-  (Node `fetch` no server / HTTP nativo no app).
+## 🔄 EM ANDAMENTO — Fase 1 (core)
+Extrair a lógica reaproveitável pro `packages/core` (independente de servidor),
+com **HTTP trocável** (`HttpClient`: `fetch` no server / nativo no app).
+Construído **em paralelo** ao backend (não quebra o que está rodando); convergir
+o backend pra importar do core é cleanup posterior.
+
+**Já migrado pro core (compila):**
+- `http/HttpClient` + `FetchHttpClient` (camada de rede trocável)
+- `utils/lruCache` (cache LRU, puro)
+- `parsers/m3uParser` (puro)
+- `text/normalize` (`stripAccents` manual, `normalizeTitle`, `cleanForSearch`, `compact`)
+
+**Próximo no core:**
+1. `parsers/epgParser` (+ dep `xml2js`, desacoplar de env/logger)
+2. Rede via `HttpClient`: `titleMatch` (TMDB), `sofascoreAgenda` (relay)
+3. `providers/*` (xtream/iptv-org/m3u) recebendo `HttpClient` + config
+4. `addon/M3UEPGAddon` (orquestra tudo) — recebe config + http + storage
 
 ## 📋 A FAZER (fases do app)
 1. **Core** (em andamento): extrair `M3UEPGAddon`/parsers/`titleMatch`/
