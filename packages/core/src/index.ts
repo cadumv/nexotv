@@ -31,3 +31,8 @@ export {
     fetchSofascoreAgenda, BR_FOOTBALL_CHANNELS,
     type AgendaGame, type AgendaConfig,
 } from './agenda/sofascoreAgenda';
+
+// Config / ids
+export { type AddonConfig } from './types';
+export { createCacheKey, idPrefixFromCacheKey } from './config/cacheKey';
+export { md5 } from './utils/md5';
