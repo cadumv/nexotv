@@ -1,0 +1,13 @@
+{
+  "name": "@nexotv/core",
+  "version": "0.1.0",
+  "description": "Lógica do NexoTV independente de servidor (roda no backend e no app)",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "build:check": "tsc --noEmit"
+  },
+  "license": "MIT"
+}
