@@ -6,7 +6,7 @@ const U = process.env.RAJADA_URL || 'http://localhost:4173/';
 const out = (n) => new URL('./out/' + n, import.meta.url).pathname.replace(/^\//, '');
 
 // 1) tela inicial num viewport BAIXO (pra garantir que cabe sem rolar)
-const ctx = await b.newContext({ viewport: { width: 1280, height: 660 } });
+const ctx = await b.newContext({ viewport: { width: 1366, height: 820 } });
 const p = await ctx.newPage();
 await p.goto(U, { waitUntil: 'domcontentloaded' });
 await p.evaluate((c) => localStorage.setItem('rajada.config.v1', JSON.stringify(c)), cfg);

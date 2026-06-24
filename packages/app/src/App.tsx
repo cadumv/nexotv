@@ -297,6 +297,8 @@ function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) =>
                 <div className="pick-cards">
                     {Card('vod', 'pc-vod', art.vod, 'Filmes e Séries', 'Catálogo completo', false)}
                     {Card('channels', 'pc-channels', art.tv, 'Canais', 'TV agora', false)}
+                </div>
+                <div className="pick-cards pick-row2">
                     {Card('games', 'pc-games', art.live, 'Jogos ao vivo', 'Acontecendo e próximos', true)}
                 </div>
                 {status && <div className="status">{status}</div>}
