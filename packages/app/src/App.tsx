@@ -272,7 +272,7 @@ function Player({ url, title, onClose }: { url: string; title: string; onClose: 
 function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
     const shape = meta.posterShape || 'poster';
     return (
-        <button className={`tile ${shape}`} onClick={onPlay} title={meta.name}>
+        <button className={`tile ${shape}`} onClick={onPlay} aria-label={meta.name}>
             {meta.poster && <img src={meta.poster} alt={meta.name} loading="lazy" />}
             <span className="tile-name">{meta.name}</span>
         </button>

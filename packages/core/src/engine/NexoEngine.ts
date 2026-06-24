@@ -285,16 +285,22 @@ export class NexoEngine {
         this._logoIdx = { byBase, byWord };
         return this._logoIdx;
     }
+    // Banco curado (iptv-org): PNGs transparentes de estilo uniforme. Preferi-lo
+    // ao tvg-logo do provedor (fundos brancos/escuros aleatórios) deixa o visual
+    // consistente sozinho pros canais conhecidos.
+    private _findBankLogo(name: string): string | null {
+        const bank = this.options.logoBank;
+        if (!bank) return null;
+        const base = this._channelBaseName(name).toLowerCase();
+        const cb = compact(base) || compact(name);
+        return (cb && bank[cb]) ? bank[cb] : null;
+    }
     private _findProviderLogo(name: string): string | null {
         const idx = this._ensureLogoIndex();
         const base = this._channelBaseName(name).toLowerCase();
         if (idx.byBase.has(base)) return idx.byBase.get(base)!;
-        // banco externo opcional (iptv-org etc.), por nome compacto
-        const bank = this.options.logoBank;
-        if (bank) {
-            const cb = compact(base) || compact(name);
-            if (cb && bank[cb]) return bank[cb];
-        }
+        const bank = this._findBankLogo(name);
+        if (bank) return bank;
         const w = base.split(' ')[0] || '';
         if (w.length >= 3 && idx.byWord.has(w)) return idx.byWord.get(w)!;
         return null;
@@ -302,11 +308,16 @@ export class NexoEngine {
 
     deriveFallbackLogoUrl(item: any) {
         const own = item.attributes?.['tvg-logo'] || item.logo;
-        // 1) logo do próprio canal; 2) logo de um irmão da mesma marca (índice do provedor)
-        let finalUrl = (own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || '');
+        // Ordem (visual consistente sozinho):
+        // 1) banco curado iptv-org (transparente, estilo uniforme) p/ canal conhecido
+        // 2) logo do próprio canal; 3) logo de irmão da mesma marca (índice do provedor)
+        let finalUrl = this._findBankLogo(item.name || '')
+            || ((own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || ''));
         if (finalUrl) {
             if (finalUrl.includes('imgur.com')) finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
-            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&bg=1b1b22`;
+            // trim=10 corta bordas/margens uniformes (logos preenchem melhor); bg igual
+            // ao card (#15151b) pra logos transparentes blendarem sem moldura visível.
+            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&trim=10&bg=15151b`;
         }
         // 3) sem nada → card colorido gerado (cor determinística pelo nome) — sem banco.
         const base = this._channelBaseName(item.name) || item.name || 'TV';

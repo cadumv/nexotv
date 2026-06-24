@@ -16,17 +16,17 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .brand-sm { font-weight: 800; letter-spacing: 1px; color: #e50914; font-size: 22px; }
 .logout { background: transparent; color: #aaa; border: 0; cursor: pointer; }
 .status { padding: 10px 24px; color: #bbb; }
-.row { padding: 8px 0 22px; }
-.row h2 { font-size: 19px; margin: 0 0 12px 32px; font-weight: 700; }
-.tiles { display: flex; gap: 14px; overflow-x: auto; padding: 6px 32px 10px; scrollbar-width: none; }
+.row { padding: 0 0 14px; }
+.row h2 { font-size: 19px; margin: 0 0 4px 40px; font-weight: 700; }
+/* padding vertical generoso pro tile em foco (scale) não ser cortado pela fileira */
+.tiles { display: flex; gap: 14px; overflow-x: auto; overflow-y: hidden; padding: 26px 40px; scrollbar-width: none; }
 .tiles::-webkit-scrollbar { display: none; }
-.tile { flex: 0 0 auto; background: #16161c; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer; padding: 0; position: relative; transition: transform .18s, box-shadow .18s; }
-.tile:hover, .tile:focus { transform: scale(1.1); outline: 3px solid #fff; z-index: 3; box-shadow: 0 8px 30px rgba(0,0,0,.6); }
-.tile:focus { outline-color: #e50914; }
+.tile { flex: 0 0 auto; background: #16161c; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer; padding: 0; position: relative; transition: transform .18s, box-shadow .18s; transform-origin: center; }
+.tile:hover, .tile:focus { transform: scale(1.09); outline: 3px solid #e50914; z-index: 3; box-shadow: 0 10px 34px rgba(0,0,0,.7); }
 .tile img { display: block; width: 100%; height: 100%; }
 /* Canais: logo CONTIDO e centralizado num card uniforme (sem esticar/cortar). */
-.tile.square { width: 168px; height: 168px; background: #1b1b22; }
-.tile.square img { object-fit: contain; padding: 16px; }
+.tile.square { width: 168px; height: 168px; background: #15151b; }
+.tile.square img { object-fit: contain; padding: 10px; }
 /* Filmes/séries: pôster 2:3 preenchendo. Jogos: landscape 16:9 preenchendo. */
 .tile.poster { width: 150px; height: 225px; }
 .tile.poster img { object-fit: cover; }
