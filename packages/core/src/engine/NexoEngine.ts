@@ -348,10 +348,16 @@ export class NexoEngine {
         return { base, variants };
     }
 
+    // Escolhe a variante com logo (qualquer uma), pra não cair no card só porque a
+    // melhor qualidade veio sem logo.
+    _repWithLogo(channels: any[]) {
+        return channels.find(c => ((c.attributes?.['tvg-logo'] || c.logo || '').trim())) || channels[0] || {};
+    }
+
     generateChannelGroupPreview(g: any) {
-        const rep = g.channels[0] || {};
+        const rep = this._repWithLogo(g.channels);
         const logo = this.deriveFallbackLogoUrl(rep);
-        const epgId = rep.attributes?.['tvg-id'] || rep.epg_channel_id;
+        const epgId = (g.channels[0] || {}).attributes?.['tvg-id'] || (g.channels[0] || {}).epg_channel_id;
         const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
         const agora = cur ? `Agora: ${stripAccents(cur.title)}` : undefined;
         return {
@@ -368,6 +374,7 @@ export class NexoEngine {
         const { base, variants } = this._channelsForGroupKey(key);
         if (!variants.length) return null;
         const rep = variants[0];
+        const logoRep = this._repWithLogo(variants);
         const epgId = rep.attributes?.['tvg-id'] || rep.attributes?.['tvg-name'] || rep.epg_channel_id;
         const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
         const upcoming = getUpcomingPrograms(this.epgData, epgId, 4, this.epgOffset);
@@ -379,7 +386,7 @@ export class NexoEngine {
             if (cur.description) description += `\n\n${stripAccents(cur.description)}`;
         }
         if (upcoming.length) { description += '\n\nA SEGUIR:\n'; for (const p of upcoming) description += `${hhmm(p.startTime)} - ${stripAccents(p.title)}\n`; }
-        const logo = this.deriveFallbackLogoUrl(rep);
+        const logo = this.deriveFallbackLogoUrl(logoRep);
         return {
             id, type: 'tv', name: base, poster: logo, background: logo, posterShape: 'square',
             description, genres: rep.category ? [rep.category] : ['Live TV'], runtime: 'Live',
