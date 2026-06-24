@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
-import { createEngine, tmdbBackdrop } from './engineHost';
+import { createEngine, tmdbPoster } from './engineHost';
 
 const LS_KEY = 'rajada.config.v1';
 
@@ -199,15 +199,15 @@ function App() {
                 const c = cats.find((x: any) => x.id === 'nexotv_vod');
                 if (c) {
                     const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
-                    for (const m of metas.slice(0, 4)) {
-                        const mm = await engine.getMeta('movie', m.id).catch(() => null);
-                        const bg = mm?.meta?.background;
-                        if (bg && !/placehold/.test(bg)) { vod = bg; break; }
-                    }
+                    // pôster retrato real (encaixa no card 2:3)
+                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
+                    if (withP) vod = withP.poster;
+                    else if (metas[0]) vod = (await engine.getTmdbPosterFor(metas[0].id).catch(() => null)) || undefined;
                 }
             } catch { /* fallback gradiente */ }
-            const tv = (await tmdbBackdrop('telejornal').catch(() => null)) || (await tmdbBackdrop('television studio').catch(() => null)) || undefined;
-            const live = (await tmdbBackdrop('futebol').catch(() => null)) || (await tmdbBackdrop('soccer stadium').catch(() => null)) || undefined;
+            const tv = (await tmdbPoster('jornal nacional').catch(() => null)) || (await tmdbPoster('telejornal').catch(() => null)) || undefined;
+            const live = (await tmdbPoster('Pelé').catch(() => null)) || (await tmdbPoster('Ronaldo').catch(() => null))
+                || (await tmdbPoster('Maradona').catch(() => null)) || (await tmdbPoster('Quero ser campeão').catch(() => null)) || undefined;
             if (!dead) setPickArt({ vod, tv, live });
         })();
         return () => { dead = true; };
