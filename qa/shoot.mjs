@@ -1,0 +1,92 @@
+// QA visual autônomo do Rajada: semeia a config no localStorage, abre o app,
+// tira prints e coleta diagnóstico objetivo (dimensões reais de cada tile,
+// imagens quebradas, e logos que deram 404). Roda: node qa/shoot.mjs
+import { chromium } from 'playwright';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT = join(HERE, 'out');
+mkdirSync(OUT, { recursive: true });
+
+const URL = process.env.RAJADA_URL || 'http://localhost:5173/';
+const cfg = JSON.parse(readFileSync(join(HERE, 'rajada.config.json'), 'utf8'));
+
+const browser = await chromium.launch({ headless: true });
+const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, deviceScaleFactor: 1 });
+const page = await ctx.newPage();
+
+// Coleta de respostas com falha (404 etc.) — pra saber quais logos quebram.
+const failed = [];
+page.on('response', (r) => { if (!r.ok()) failed.push({ status: r.status(), url: r.url() }); });
+page.on('console', (m) => { if (m.type() === 'error') console.log('PAGE-ERR:', m.text()); });
+
+// 1) abre uma vez pra existir a origin, semeia o localStorage, recarrega.
+await page.goto(URL, { waitUntil: 'domcontentloaded' });
+await page.evaluate((c) => {
+    localStorage.setItem('rajada.config.v1', JSON.stringify(c));
+}, cfg);
+await page.reload({ waitUntil: 'domcontentloaded' });
+
+// 2) espera as fileiras carregarem (dados do IPTV podem demorar).
+try { await page.waitForSelector('.tiles .tile img', { timeout: 90000 }); }
+catch { console.log('!! Nenhum tile apareceu em 90s — provedor fora do ar ou CORS?'); }
+
+// 2b) rola a página inteira em passos pra disparar TODAS as imagens lazy,
+//     senão o fullPage screenshot pega só as do topo carregadas.
+await page.evaluate(async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const h = document.body.scrollHeight;
+    for (let y = 0; y < h; y += 700) { window.scrollTo(0, y); await sleep(120); }
+    window.scrollTo(0, 0); await sleep(200);
+});
+await page.waitForTimeout(12000); // deixa logos (wsrv) resolverem após o scroll
+
+// 3) print da home inteira + crops de alta-res das primeiras fileiras.
+await page.screenshot({ path: join(OUT, '00-home.png'), fullPage: true });
+const tileRowsEls = await page.$$('.tiles');
+for (let i = 0; i < Math.min(7, tileRowsEls.length); i++) {
+    try { await tileRowsEls[i].screenshot({ path: join(OUT, `row-${String(i).padStart(2, '0')}.png`) }); } catch { }
+}
+
+// 4) diagnóstico por fileira: nome da row, e por tile a classe/dimensões reais
+//    + se a imagem renderizou (naturalWidth) + aspect do tile vs aspect da imagem.
+const report = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.row, section.row')];
+    const out = [];
+    // pega TODAS as fileiras com tiles (inclui as sem classe .row explícita)
+    const tileRows = [...document.querySelectorAll('.tiles')];
+    for (const tr of tileRows) {
+        const head = tr.parentElement?.querySelector('h2')?.textContent?.trim() || '(sem título)';
+        const tiles = [...tr.querySelectorAll('.tile')].slice(0, 12).map((t) => {
+            const img = t.querySelector('img');
+            const r = t.getBoundingClientRect();
+            const cls = t.className.replace('tile', '').trim();
+            return {
+                cls,
+                w: Math.round(r.width), h: Math.round(r.height),
+                ratio: +(r.width / r.height).toFixed(2),
+                imgW: img?.naturalWidth || 0, imgH: img?.naturalHeight || 0,
+                imgRatio: img?.naturalWidth ? +(img.naturalWidth / img.naturalHeight).toFixed(2) : 0,
+                broken: !img || img.naturalWidth === 0,
+                src: (img?.currentSrc || img?.src || '').slice(0, 90),
+            };
+        });
+        out.push({ row: head, count: tr.querySelectorAll('.tile').length, tiles });
+    }
+    return out;
+});
+
+// 5) resumo de problemas: tiles com forma divergente dentro da mesma fileira +
+//    imagens quebradas.
+const summary = report.map((row) => {
+    const shapes = [...new Set(row.tiles.map((t) => t.cls))];
+    const broken = row.tiles.filter((t) => t.broken).length;
+    return { row: row.row, count: row.count, shapesNaFileira: shapes, brokenVisiveis: broken };
+});
+
+writeFileSync(join(OUT, 'report.json'), JSON.stringify({ summary, report, failedResponses: failed.filter(f => /\.(png|jpg|jpeg|svg|webp)|wsrv|placehold|image/i.test(f.url)).slice(0, 60) }, null, 2));
+console.log('OK -> qa/out/00-home.png + report.json');
+console.log('Fileiras:', summary.length, '| respostas com falha:', failed.length);
+await browser.close();

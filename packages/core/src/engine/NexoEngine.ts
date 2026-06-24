@@ -288,45 +288,68 @@ export class NexoEngine {
     // Banco curado (iptv-org): PNGs transparentes de estilo uniforme. Preferi-lo
     // ao tvg-logo do provedor (fundos brancos/escuros aleatórios) deixa o visual
     // consistente sozinho pros canais conhecidos.
+    private _bankPrefixMemo = new Map<string, string | null>();
     private _findBankLogo(name: string): string | null {
         const bank = this.options.logoBank;
         if (!bank) return null;
         const base = this._channelBaseName(name).toLowerCase();
         const cb = compact(base) || compact(name);
-        return (cb && bank[cb]) ? bank[cb] : null;
+        if (!cb) return null;
+        if (bank[cb]) return bank[cb];
+        // Sem chave exata: tenta uma chave que COMECE com o nome compacto (ex:
+        // "redecnt" → "redecntbelem"). Pega a mais curta (afiliada mais "genérica").
+        if (cb.length >= 4) {
+            if (this._bankPrefixMemo.has(cb)) return this._bankPrefixMemo.get(cb)!;
+            let best: string | null = null;
+            for (const k in bank) { if (k.startsWith(cb) && (!best || k.length < best.length)) best = k; }
+            const url = best ? bank[best] : null;
+            this._bankPrefixMemo.set(cb, url);
+            return url;
+        }
+        return null;
     }
-    private _findProviderLogo(name: string): string | null {
+    // Logo de um irmão da mesma marca (índice do PRÓPRIO provedor, sem banco).
+    private _findSiblingLogo(name: string): string | null {
         const idx = this._ensureLogoIndex();
         const base = this._channelBaseName(name).toLowerCase();
         if (idx.byBase.has(base)) return idx.byBase.get(base)!;
-        const bank = this._findBankLogo(name);
-        if (bank) return bank;
         const w = base.split(' ')[0] || '';
         if (w.length >= 3 && idx.byWord.has(w)) return idx.byWord.get(w)!;
         return null;
     }
-
-    deriveFallbackLogoUrl(item: any) {
-        const own = item.attributes?.['tvg-logo'] || item.logo;
-        // 1) logo do próprio canal (sabemos que carrega p/ esse provedor);
-        // 2) irmão da mesma marca / banco curado (índice do provedor).
-        let finalUrl = (own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || '');
-        if (finalUrl) {
-            if (finalUrl.includes('imgur.com')) finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
-            // trim=10 corta bordas/margens uniformes (logos preenchem melhor); bg igual
-            // ao card (#15151b) pra logos transparentes blendarem sem moldura visível.
-            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&trim=10&bg=15151b`;
-        }
-        // 3) sem nada → card colorido gerado (cor determinística pelo nome) — sem banco.
+    private _findProviderLogo(name: string): string | null {
+        return this._findSiblingLogo(name) || this._findBankLogo(name);
+    }
+    // Normaliza qualquer logo num quadrado 320 com fundo do card (transparentes
+    // blendam; bordas uniformes são cortadas pra preencher melhor).
+    private _wsrv(url: string): string {
+        let u = url;
+        if (u.includes('imgur.com')) u = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(u)}`;
+        return `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=320&h=320&fit=contain&we&trim=10&bg=15151b`;
+    }
+    private _logoCardUrl(item: any): string {
         const base = this._channelBaseName(item.name) || item.name || 'TV';
         return `https://placehold.co/320x320/${this._logoCardColor(base)}/FFFFFF.png?text=${encodeURIComponent(base)}&font=oswald`;
     }
+    // Cascata de logos (melhor → pior), resolvida sozinha no <img onError>:
+    // 1) banco curado iptv-org (PNG transparente, estilo uniforme p/ canal conhecido)
+    // 2) logo do próprio canal; 3) logo de irmão da marca; 4) card colorido gerado.
+    logoCandidates(item: any): string[] {
+        const own = (item.attributes?.['tvg-logo'] || item.logo || '').trim();
+        const out: string[] = [];
+        const bank = this._findBankLogo(item.name || ''); if (bank) out.push(this._wsrv(bank));
+        if (own) out.push(this._wsrv(own));
+        const sib = this._findSiblingLogo(item.name || ''); if (sib) out.push(this._wsrv(sib));
+        out.push(this._logoCardUrl(item));
+        return [...new Set(out)];
+    }
+    deriveFallbackLogoUrl(item: any) { return this.logoCandidates(item)[0]; }
 
     generateMetaPreview(item: any) {
-        const logoUrl = this.deriveFallbackLogoUrl(item);
+        const chain = this.logoCandidates(item);
         return {
             id: item.id, type: 'tv', name: item.name,
-            poster: logoUrl, background: logoUrl, posterShape: 'square',
+            poster: chain[0], background: chain[0], posterChain: chain, posterShape: 'square',
             genres: item.category ? [item.category] : (item.attributes?.['group-title'] ? [item.attributes['group-title']] : ['Live TV']),
             runtime: 'Live',
         };
@@ -422,13 +445,13 @@ export class NexoEngine {
 
     generateChannelGroupPreview(g: any) {
         const rep = this._repWithLogo(g.channels);
-        const logo = this.deriveFallbackLogoUrl(rep);
+        const chain = this.logoCandidates(rep);
         const epgId = (g.channels[0] || {}).attributes?.['tvg-id'] || (g.channels[0] || {}).epg_channel_id;
         const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
         const agora = cur ? `Agora: ${stripAccents(cur.title)}` : undefined;
         return {
             id: this._encodeChannelGroupId(g.base), type: 'tv', name: g.base,
-            poster: logo, background: logo, posterShape: 'square',
+            poster: chain[0], background: chain[0], posterChain: chain, posterShape: 'square',
             description: agora, releaseInfo: agora,
             genres: g.category ? [g.category] : ['Live TV'],
         };
@@ -452,9 +475,9 @@ export class NexoEngine {
             if (cur.description) description += `\n\n${stripAccents(cur.description)}`;
         }
         if (upcoming.length) { description += '\n\nA SEGUIR:\n'; for (const p of upcoming) description += `${hhmm(p.startTime)} - ${stripAccents(p.title)}\n`; }
-        const logo = this.deriveFallbackLogoUrl(logoRep);
+        const chain = this.logoCandidates(logoRep);
         return {
-            id, type: 'tv', name: base, poster: logo, background: logo, posterShape: 'square',
+            id, type: 'tv', name: base, poster: chain[0], background: chain[0], posterChain: chain, posterShape: 'square',
             description, genres: rep.category ? [rep.category] : ['Live TV'], runtime: 'Live',
         };
     }
@@ -775,9 +798,9 @@ export class NexoEngine {
             description += '\n\nA SEGUIR:\n';
             for (const p of upcoming) description += `${hhmm(p.startTime)} - ${stripAccents(p.title)}\n`;
         }
-        const logoUrl = this.deriveFallbackLogoUrl(item);
+        const chain = this.logoCandidates(item);
         return {
-            id: item.id, type: 'tv', name: item.name, poster: logoUrl, background: logoUrl, posterShape: 'square',
+            id: item.id, type: 'tv', name: item.name, poster: chain[0], background: chain[0], posterChain: chain, posterShape: 'square',
             description,
             genres: item.category ? [item.category] : (item.attributes?.['group-title'] ? [item.attributes['group-title']] : ['Live TV']),
             runtime: 'Live',

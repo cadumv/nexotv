@@ -66,7 +66,7 @@ function App() {
 
     const recordCw = (meta: any) => {
         setCw(prev => {
-            const next = [{ id: meta.id, name: meta.name, poster: meta.poster, posterShape: meta.posterShape, type: meta.type },
+            const next = [{ id: meta.id, name: meta.name, poster: meta.poster, posterChain: meta.posterChain, posterShape: meta.posterShape, type: meta.type },
             ...prev.filter((x: any) => x.id !== meta.id)].slice(0, 20);
             localStorage.setItem('rajada.cw.v1', JSON.stringify(next));
             return next;
@@ -286,14 +286,21 @@ function cardFor(name: string) {
 }
 function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
     const shape = shapeFor(meta);
+    // Cascata de logos (banco → próprio → irmão → card). Se uma falhar, o onError
+    // avança pra próxima sozinho — nunca fica vazio.
+    const chain: string[] = (Array.isArray(meta.posterChain) && meta.posterChain.length)
+        ? meta.posterChain
+        : [meta.poster || cardFor(meta.name)];
+    const [idx, setIdx] = useState(0);
+    const card = cardFor(meta.name);
+    const src = chain[Math.min(idx, chain.length - 1)] || card;
     const onErr = (e: React.SyntheticEvent<HTMLImageElement>) => {
-        const img = e.currentTarget;
-        const card = cardFor(meta.name);
-        if (img.src !== card) img.src = card;          // logo quebrado → card (nunca fica vazio)
+        if (idx < chain.length - 1) setIdx(idx + 1);
+        else if (e.currentTarget.src !== card) e.currentTarget.src = card;
     };
     return (
         <button className={`tile ${shape}`} onClick={onPlay} aria-label={meta.name}>
-            <img src={meta.poster || cardFor(meta.name)} alt={meta.name} loading="lazy" onError={onErr} />
+            <img src={src} alt={meta.name} loading="lazy" onError={onErr} />
             <span className="tile-name">{meta.name}</span>
         </button>
     );

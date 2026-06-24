@@ -47,3 +47,7 @@ docs/
 
 # Stremio specific
 .well-known/
+
+# QA visual (credenciais + prints locais)
+qa/rajada.config.json
+qa/out/
