@@ -148,6 +148,10 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .vod-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .vod-board { position: relative; flex: 0 0 auto; height: 44vh; min-height: 300px; background-size: cover; background-position: center 18%; display: flex; align-items: flex-end; transition: background-image .25s ease; }
 .vb-grad { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(11,11,15,.96) 0%, rgba(11,11,15,.72) 38%, rgba(11,11,15,.15) 70%, transparent 100%), linear-gradient(0deg, #0b0b0f 2%, transparent 42%); }
+/* Sem backdrop: fundo escuro suave + pôster como miniatura à direita (Stremio). */
+.vod-board.noart { background: radial-gradient(120% 130% at 90% 10%, #20242e 0%, #121419 45%, #0b0b0f 100%); }
+.vod-board.noart .vb-grad { background: linear-gradient(90deg, #0b0b0f 0%, rgba(11,11,15,.6) 42%, transparent 62%), linear-gradient(0deg, #0b0b0f 2%, transparent 42%); }
+.vb-poster { position: absolute; right: 48px; top: 50%; transform: translateY(-50%); height: 78%; aspect-ratio: 2/3; object-fit: cover; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
 .vb-info { position: relative; padding: 0 40px 22px; max-width: 60%; }
 .vb-kind { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #e50914; margin-bottom: 6px; }
 .vb-title { font-size: clamp(26px, 3.6vw, 46px); font-weight: 800; margin: 0 0 8px; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.85); }

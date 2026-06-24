@@ -600,9 +600,13 @@ function ChannelsView({ engine, cats, flat, loading }: {
     const scrollRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const timer = useRef<any>(null);
+    const watchTimer = useRef<any>(null); // só conta "assistido" após 10 min no canal
     const started = useRef(false);
 
     const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
+
+    // Limpa o timer de "assistido" ao sair da tela.
+    useEffect(() => () => clearTimeout(watchTimer.current), []);
 
     // Lista de exibição: prepend "Mais assistidos" (pelo histórico local) se houver.
     const { vflat, vcats, vCatFirst } = useMemo(() => {
@@ -627,8 +631,13 @@ function ChannelsView({ engine, cats, flat, loading }: {
     const loadStream = useCallback(async (i: number) => {
         const it = vflat[i]; if (!it || it.kind !== 'chan') return;
         setTitle(it.meta.name);
-        // conta como assistido (histórico p/ "Mais assistidos") — persiste sem reembaralhar agora
-        try { const w = loadWatch(); w[it.meta.name] = (w[it.meta.name] || 0) + 1; localStorage.setItem(WATCH_KEY, JSON.stringify(w)); } catch { }
+        // "Mais assistidos": só conta depois de 10 min CONTÍNUOS no canal (zapear não
+        // conta). O timer reinicia a cada troca; sai antes dos 10 min → não registra.
+        clearTimeout(watchTimer.current);
+        const name = it.meta.name;
+        watchTimer.current = setTimeout(() => {
+            try { const w = loadWatch(); w[name] = (w[name] || 0) + 1; localStorage.setItem(WATCH_KEY, JSON.stringify(w)); } catch { }
+        }, 10 * 60 * 1000);
         try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setSources(dedupStreams(streams)[0]?.urls || []); }
         catch { setOpts([]); setSources([]); }
     }, [engine, vflat]);
@@ -823,10 +832,13 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const timer = useRef<any>(null);
     const interacted = useRef(false);
     const [spin, setSpin] = useState(0); // índice da auto-rotação (billboard ocioso)
-    const [mainCat, setMainCat] = useState<string>('__all'); // categoria principal
-    const [subCat, setSubCat] = useState<string>('__all');   // subcategoria (id do catálogo)
+    const initCat = useRef<any>((() => { try { return JSON.parse(localStorage.getItem('rajada.vodcat.v1') || '{}'); } catch { return {}; } })());
+    const [mainCat, setMainCat] = useState<string>(initCat.current.main || '__all'); // categoria principal
+    const [subCat, setSubCat] = useState<string>(initCat.current.sub || '__all');    // subcategoria (id do catálogo)
     const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // buscadas sob demanda
     const [loadingCat, setLoadingCat] = useState(false);
+    // Categorias descobertas vazias (escondidas dos botões). Persiste entre sessões.
+    const [empty, setEmpty] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('rajada.vodempty.v1') || '[]')); } catch { return new Set(); } });
 
     // Árvore de categorias do catálogo. Nome "Filmes | Ação" vira principal
     // "Filmes" + sub "Ação"; sem "|" vira uma principal própria (com selfId).
@@ -844,10 +856,20 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
         return [...map.values()];
     }, [engine]);
 
+    // Árvore visível: esconde subs vazias e principais cujo conteúdo é todo vazio.
+    const visTree = useMemo(() => tree
+        .map(n => ({ ...n, subs: n.subs.filter(s => !empty.has(s.id)) }))
+        .filter(n => (n.selfId ? !empty.has(n.selfId) : false) || n.subs.length > 0)
+        , [tree, empty]);
+
     const node = mainCat === '__all' ? null : tree.find(n => n.name === mainCat) || null;
-    // Catálogo efetivo selecionado (sub escolhida → ela; senão o "pai", senão a 1ª sub).
+    const visNode = mainCat === '__all' ? null : visTree.find(n => n.name === mainCat) || null;
+    // Catálogo efetivo selecionado (sub escolhida → ela; senão o "pai" não-vazio,
+    // senão a 1ª sub não-vazia).
     const selId = mainCat === '__all' ? null
-        : (subCat !== '__all' ? subCat : (node?.selfId || node?.subs[0]?.id || null));
+        : (subCat !== '__all' ? subCat
+            : ((node?.selfId && !empty.has(node.selfId)) ? node.selfId
+                : (node?.subs.find(s => !empty.has(s.id))?.id || node?.selfId || node?.subs[0]?.id || null)));
 
     const metasOf = (id: string | null) => {
         if (!id) return [];
@@ -855,14 +877,23 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
         return r ? r.metas : (loaded[id] || []);
     };
 
-    // Busca o catálogo selecionado sob demanda, se ainda não carregado.
+    // Lembra a última categoria aberta.
+    useEffect(() => { try { localStorage.setItem('rajada.vodcat.v1', JSON.stringify({ main: mainCat, sub: subCat })); } catch { } }, [mainCat, subCat]);
+    // Se a categoria lembrada não existe mais no catálogo, volta pra "Tudo".
+    useEffect(() => { if (mainCat !== '__all' && tree.length && !tree.find(n => n.name === mainCat)) { setMainCat('__all'); setSubCat('__all'); } }, [tree]);
+
+    // Busca o catálogo selecionado sob demanda; se vier vazio, marca como vazio (some dos botões).
     useEffect(() => {
         if (!selId) return;
         const inRows = [...movieRows, ...seriesRows].some(r => r.id === selId);
         if (inRows || loaded[selId]) return;
         let dead = false; setLoadingCat(true);
         engine.getCatalog({ type: node?.type || 'movie', id: selId })
-            .then(({ metas }: any) => { if (!dead) setLoaded(p => ({ ...p, [selId]: metas || [] })); })
+            .then(({ metas }: any) => {
+                if (dead) return;
+                const list = metas || []; setLoaded(p => ({ ...p, [selId]: list }));
+                if (!list.length) setEmpty(prev => { const n = new Set(prev); n.add(selId); try { localStorage.setItem('rajada.vodempty.v1', JSON.stringify([...n])); } catch { } return n; });
+            })
             .catch(() => { if (!dead) setLoaded(p => ({ ...p, [selId]: [] })); })
             .finally(() => { if (!dead) setLoadingCat(false); });
         return () => { dead = true; };
@@ -911,7 +942,8 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const year = D.releaseInfo || '';
     const genres: string[] = Array.isArray(D.genres) ? D.genres : [];
     const cast: string[] = Array.isArray(D.cast) ? D.cast : [];
-    const bg = D.background || D.poster;
+    const art = D.background && !/placehold/.test(D.background) ? D.background : '';
+    const noArt = !art; // sem backdrop → mostra o pôster como miniatura (Stremio)
 
     const rows: { id: string; name: string; metas: any[] }[] = [];
     if (cwAll.length) rows.push({ id: '__cw', name: 'Continuar assistindo', metas: cwAll });
@@ -919,8 +951,12 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
 
     return (
         <div className="vod-view">
-            <div className="vod-board" style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
+            <div className={'vod-board' + (noArt ? ' noart' : '')} style={art ? { backgroundImage: `url("${art}")` } : undefined}>
                 <div className="vb-grad" />
+                {noArt && D.poster && !/placehold/.test(D.poster) && (
+                    <img className="vb-poster" src={D.poster} alt="" loading="lazy"
+                        onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                )}
                 <div className="vb-info">
                     <span className="vb-kind">{D.type === 'series' ? 'SÉRIE' : 'FILME'}</span>
                     <h1 className="vb-title">{D.name}</h1>
@@ -939,14 +975,14 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                 <div className="vod-catbar">
                     <div className="vod-cats">
                         <button className={`vod-cat${mainCat === '__all' ? ' on' : ''}`} onClick={() => pickMain('__all')} onFocus={focusScroll}>Tudo</button>
-                        {tree.map(n => (
+                        {visTree.map(n => (
                             <button key={n.name} className={`vod-cat${mainCat === n.name ? ' on' : ''}`} onClick={() => pickMain(n.name)} onFocus={focusScroll}>{n.name}</button>
                         ))}
                     </div>
-                    {node && node.subs.length > 0 && (
+                    {visNode && visNode.subs.length > 0 && (
                         <div className="vod-subcats">
-                            {node.selfId && <button className={`vod-sub${subCat === '__all' ? ' on' : ''}`} onClick={() => setSubCat('__all')} onFocus={focusScroll}>Todos</button>}
-                            {node.subs.map(s => (
+                            {visNode.selfId && <button className={`vod-sub${subCat === '__all' ? ' on' : ''}`} onClick={() => setSubCat('__all')} onFocus={focusScroll}>Todos</button>}
+                            {visNode.subs.map(s => (
                                 <button key={s.id} className={`vod-sub${subCat === s.id ? ' on' : ''}`} onClick={() => setSubCat(s.id)} onFocus={focusScroll}>{s.name}</button>
                             ))}
                         </div>
