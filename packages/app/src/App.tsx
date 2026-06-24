@@ -89,6 +89,27 @@ function spatialMove(dir: string): boolean {
     return false;
 }
 
+// Navegação por D-pad no stage de Canais/Jogos (controle remoto):
+//  - foco na LISTA (stage): ↑↓ zapeia o canal/jogo, → vai pro player, Voltar = onBack.
+//  - foco no PLAYER/PROVEDORES: setas = navegação espacial (↓ do player chega nos
+//    provedores), e se cair na lista volta pro modo zap; Voltar volta pra lista.
+function stageNav(e: React.KeyboardEvent, stage: HTMLElement | null, move: (d: 1 | -1) => void, onBack: () => void) {
+    const a = document.activeElement as HTMLElement | null;
+    const onList = !a || a === stage;
+    if (onList) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+        else if (e.key === 'ArrowRight') { e.preventDefault(); (stage?.querySelector('.live-player') as HTMLElement | null)?.focus(); }
+        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); onBack(); }
+    } else {
+        if (e.key.startsWith('Arrow')) {
+            e.preventDefault(); spatialMove(e.key);
+            const na = document.activeElement as HTMLElement | null;
+            if (na && na.closest('.chan-list')) stage?.focus();  // caiu na lista → volta pro zap
+        } else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); stage?.focus(); }
+    }
+}
+
 function App() {
     const [saved, setSaved] = useState<SavedConfig | null>(loadSaved());
     const [engine, setEngine] = useState<NexoEngine | null>(null);
@@ -589,11 +610,7 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
         const np = Math.max(0, Math.min(gameIdxs.length - 1, pos + dir));
         select(gameIdxs[np]);
     };
-    const onKey = (e: React.KeyboardEvent) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); onBack(); }
-    };
+    const onKey = (e: React.KeyboardEvent) => stageNav(e, stageRef.current, move, onBack);
 
     return (
         <div className="chan-live" ref={stageRef} tabIndex={0} onKeyDown={onKey}>
@@ -784,11 +801,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
         const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
         select(chanIdxs[np]);
     };
-    const onKey = (e: React.KeyboardEvent) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setMode('cats'); }
-    };
+    const onKey = (e: React.KeyboardEvent) => stageNav(e, stageRef.current, move, () => setMode('cats'));
 
     const curCatName = idx >= 0 ? label(vcats.find(c => c.id === vflat[idx]?.catId)?.name || '') : '';
     const curMeta = vflat[idx]?.meta;
@@ -885,7 +898,6 @@ function LivePlayer({ sources, title, options, onPick }: {
 }) {
     const ref = useRef<HTMLVideoElement>(null);
     const boxRef = useRef<HTMLDivElement>(null);
-    const fsBtnRef = useRef<HTMLButtonElement>(null);
     const [i, setI] = useState(0);          // fonte atual dentro da cadeia
     const [dead, setDead] = useState(false); // todas as fontes falharam
     const [fs, setFs] = useState(false);     // tela cheia (CSS — funciona em qualquer TV)
@@ -913,19 +925,29 @@ function LivePlayer({ sources, title, options, onPick }: {
     useEffect(() => {
         const t = setTimeout(() => {
             if (fs) (boxRef.current?.querySelector('.live-ov-exit') as HTMLElement | null)?.focus();
-            else fsBtnRef.current?.focus();
+            else boxRef.current?.focus();
         }, 60);
         return () => clearTimeout(t);
     }, [fs]);
     const trying = i > 0 && !dead;
     const active = sources[0];
+    const canFs = !!sources.length;
+    // OK/Enter no player (foco no container) → entra em tela cheia.
+    const onBoxKey = (e: React.KeyboardEvent) => {
+        if (fs) return;
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'NumpadEnter') { e.preventDefault(); if (canFs) setFs(true); }
+    };
     return (
-        <div ref={boxRef} className={`live-player${fs ? ' fs' : ''}`}>
-            <video ref={ref} controls autoPlay playsInline className="live-video" />
-            {!!sources.length && (
-                <button ref={fsBtnRef} className="live-fs-btn" onClick={() => setFs(f => !f)}
-                    aria-label="Tela cheia" title="Tela cheia">{fs ? '🗗' : '⛶'}</button>
-            )}
+        <div ref={boxRef}
+            className={`live-player${fs ? ' fs' : ''}`}
+            tabIndex={canFs ? 0 : -1}
+            role="button"
+            aria-label="Player — OK para tela cheia"
+            onKeyDown={onBoxKey}
+            onClick={() => { if (!fs && canFs) setFs(true); }}>
+            <video ref={ref} controls={fs} autoPlay playsInline className="live-video" />
+            {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
+            {canFs && !fs && <span className="live-hint">⛶ OK = tela cheia</span>}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
             {trying && <div className="live-fallback">Fonte instável — tentando alternativa {i + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
@@ -940,7 +962,7 @@ function LivePlayer({ sources, title, options, onPick }: {
                             ))}
                         </div>
                     )}
-                    <button className="live-ov-exit" onClick={() => setFs(false)}>✕ Sair da tela cheia</button>
+                    <button className="live-ov-exit" onClick={() => setFs(false)}>✕ Sair (Voltar)</button>
                 </div>
             )}
         </div>
