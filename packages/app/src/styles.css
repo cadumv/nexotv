@@ -116,6 +116,11 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .now-opt:hover, .now-opt:focus { border-color: #16b39b; outline: none; }
 .now-opt.on { background: #16b39b; color: #04211c; border-color: #16b39b; font-weight: 700; }
 .status { padding: 10px 24px; color: #bbb; }
+/* Estado de carregamento centralizado (engine conectando / catálogo) — nunca
+   deixa a seção parecer "em branco/travada" após navegar. */
+.connecting { flex: 1; min-height: 60vh; display: flex; align-items: center; justify-content: center; gap: 12px; color: #cfcfd4; font-size: 18px; font-weight: 600; }
+.connecting .spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(255,255,255,.2); border-top-color: #e50914; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .row { padding: 0 0 14px; }
 .row h2 { font-size: 19px; margin: 0 0 4px 40px; font-weight: 700; }
 /* padding vertical generoso pro tile em foco (scale) não ser cortado pela fileira */

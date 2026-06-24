@@ -234,8 +234,9 @@ function App() {
 
             {status && <div className="status">{status}</div>}
 
-            {section === 'vod' && (
-                vodLoading && !movieRows.length && !seriesRows.length ? <div className="status">Carregando…</div> : (
+            {section === 'vod' && !engine && <div className="connecting"><span className="spin" /> Conectando ao provedor…</div>}
+            {section === 'vod' && engine && (
+                vodLoading && !movieRows.length && !seriesRows.length ? <div className="connecting"><span className="spin" /> Carregando catálogo…</div> : (
                     <>
                         {cwAll.length > 0 && (
                             <section className="row"><h2>Continuar Assistindo</h2>
@@ -257,8 +258,12 @@ function App() {
                     </>
                 )
             )}
-            {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />}
-            {section === 'games' && engine && <GamesView engine={engine} metas={gamesMetas} loading={gamesLoading} />}
+            {section === 'channels' && (engine
+                ? <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />
+                : <div className="connecting"><span className="spin" /> Conectando ao provedor…</div>)}
+            {section === 'games' && (engine
+                ? <GamesView engine={engine} metas={gamesMetas} loading={gamesLoading} />
+                : <div className="connecting"><span className="spin" /> Conectando ao provedor…</div>)}
 
             {picker && (
                 <div className="modal" onClick={() => setPicker(null)}>
