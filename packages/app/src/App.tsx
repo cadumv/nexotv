@@ -199,6 +199,9 @@ function App() {
         const results = await Promise.all(defs.map(async (c: any) => {
             try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return { c, metas }; } catch { return { c, metas: [] as any[] }; }
         }));
+        // Categorias da que tem MENOS conteúdo pra que tem MAIS (as gigantes ficam
+        // no fim, pra não obrigar a rolar logo de cara).
+        results.sort((a, b) => a.metas.length - b.metas.length);
         const flat: FlatItem[] = []; const first: Record<string, number> = {}; const cm: any[] = [];
         for (const { c, metas } of results) {
             if (!metas.length) continue;
