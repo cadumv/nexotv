@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine } from './engineHost';
@@ -11,7 +11,6 @@ function loadSaved(): SavedConfig | null {
     try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; } catch { return null; }
 }
 
-/** Tela de setup — funciona com QUALQUER IPTV: Xtream (url/user/senha) ou lista M3U. */
 function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
     const [mode, setMode] = useState<'xtream' | 'm3u'>('xtream');
     const [url, setUrl] = useState('');
@@ -52,17 +51,28 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
 }
 
 interface Row { id: string; type: string; name: string; metas: any[]; }
+type Section = 'pick' | 'movies' | 'series' | 'channels';
+// Lista plana de canais com divisores: 'header' marca o início de uma categoria,
+// 'chan' é um canal. Permite zapear ↑↓ atravessando categorias (com divisor visível).
+interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?: any; }
 
 function App() {
     const [saved, setSaved] = useState<SavedConfig | null>(loadSaved());
     const [engine, setEngine] = useState<NexoEngine | null>(null);
-    const [rows, setRows] = useState<Row[]>([]);
     const [status, setStatus] = useState('');
+    const [section, setSection] = useState<Section>('pick');
+    const [movieRows, setMovieRows] = useState<Row[]>([]);
+    const [seriesRows, setSeriesRows] = useState<Row[]>([]);
+    const [vodLoading, setVodLoading] = useState(false);
+    const [chanCats, setChanCats] = useState<{ id: string; name: string; count: number; sample?: any }[]>([]);
+    const [chanFlat, setChanFlat] = useState<FlatItem[]>([]);
+    const [catFirst, setCatFirst] = useState<Record<string, number>>({});
+    const [chanLoading, setChanLoading] = useState(false);
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
-    const [hero, setHero] = useState<any | null>(null);
     const homeRef = useRef<HTMLDivElement>(null);
+    const builtRef = useRef({ vod: false, channels: false });
 
     const recordCw = (meta: any) => {
         setCw(prev => {
@@ -72,145 +82,125 @@ function App() {
             return next;
         });
     };
-
     const play = (url: string, title: string) => { setPicker(null); setPlaying({ url, title }); };
 
+    // Filmes/séries: abre seletor de opções se houver mais de uma (tela cheia).
     const openItem = useCallback(async (meta: any) => {
         if (!engine) return;
         const streams = await engine.getStreams(meta.id);
         if (!streams.length) { setStatus('Sem stream disponível'); setTimeout(() => setStatus(''), 2500); return; }
         recordCw(meta);
         if (streams.length === 1) { play(streams[0].url, meta.name); return; }
-        // Várias opções (qualidades / canais da família) → mostra o seletor.
-        setPicker({
-            title: meta.name,
-            options: streams.map((s: any) => ({ label: String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || meta.name, url: s.url })),
-        });
+        setPicker({ title: meta.name, options: streams.map((s: any) => ({ label: String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || meta.name, url: s.url })) });
     }, [engine]);
 
-    // Navegação por controle (D-pad): setas movem o foco entre tiles/fileiras.
+    // D-pad p/ as fileiras de filmes/séries (canais tem navegação própria).
     const onKey = useCallback((e: React.KeyboardEvent) => {
         const k = e.key;
         if (!k.startsWith('Arrow')) return;
         const root = homeRef.current; if (!root) return;
         const rowsEls = Array.from(root.querySelectorAll('.tiles')) as HTMLElement[];
+        if (!rowsEls.length) return;
         const active = document.activeElement as HTMLElement;
         const focusIn = (row: HTMLElement, idx: number) => { const t = Array.from(row.querySelectorAll('.tile')) as HTMLElement[]; t[Math.max(0, Math.min(idx, t.length - 1))]?.focus(); };
         const ri = rowsEls.findIndex(r => r.contains(active));
         e.preventDefault();
-        if (ri < 0) { if (rowsEls[0]) focusIn(rowsEls[0], 0); }
+        if (ri < 0) { focusIn(rowsEls[0], 0); }
         else {
             const tiles = Array.from(rowsEls[ri].querySelectorAll('.tile')) as HTMLElement[];
             const ci = tiles.indexOf(active);
             if (k === 'ArrowRight') tiles[Math.min(ci + 1, tiles.length - 1)]?.focus();
             else if (k === 'ArrowLeft') tiles[Math.max(ci - 1, 0)]?.focus();
             else if (k === 'ArrowDown') { if (rowsEls[ri + 1]) focusIn(rowsEls[ri + 1], ci); }
-            else if (k === 'ArrowUp') { if (rowsEls[ri - 1]) focusIn(rowsEls[ri - 1], ci); else (root.querySelector('.hero-play') as HTMLElement)?.focus(); }
+            else if (k === 'ArrowUp') { if (rowsEls[ri - 1]) focusIn(rowsEls[ri - 1], ci); }
         }
         setTimeout(() => (document.activeElement as HTMLElement)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }), 0);
     }, []);
 
-    const boot = useCallback(async (s: SavedConfig) => {
-        setStatus('Carregando…');
-        try {
-            const eng = await createEngine(s.config, s.options);
-            setEngine(eng);
-            const man = eng.getManifest();
-            const cats: any[] = man.catalogs;
-            // Ordem estilo "TV paga": Futebol → categorias de canais (grade) →
-            // Filmes (+ alguns gêneros) → Séries.
-            const pick = (id: string) => cats.find((c: any) => c.id === id);
-            const ordered: any[] = [
-                pick('nexotv_games'),
-                ...cats.filter((c: any) => c.id.startsWith('iptv_channels_g_')),
-                pick('nexotv_vod'),
-                ...cats.filter((c: any) => c.id.startsWith('nexotv_vod_g_')).slice(0, 8),
-                pick('nexotv_series'),
-                ...cats.filter((c: any) => c.id.startsWith('nexotv_series_g_')).slice(0, 6),
-            ].filter(Boolean);
-            // Constrói as fileiras em paralelo (carrega rápido).
-            const built = (await Promise.all(ordered.map(async (c: any) => {
-                try {
-                    const { metas } = await eng.getCatalog({ type: c.type, id: c.id });
-                    return metas.length ? { id: c.id, type: c.type, name: c.name, metas: metas.slice(0, 30) } as Row : null;
-                } catch { return null; }
-            }))).filter(Boolean) as Row[];
-            setRows(built);
-            setStatus(built.length ? '' : 'Nenhum conteúdo (provedor fora do ar?)');
+    // Liga a engine assim que há config salva.
+    useEffect(() => {
+        if (!saved || engine) return;
+        let dead = false;
+        (async () => {
+            setStatus('Conectando…');
+            try { const eng = await createEngine(saved.config, saved.options); if (!dead) { setEngine(eng); setStatus(''); } }
+            catch (e: any) { if (!dead) setStatus('Erro: ' + (e?.message || e)); }
+        })();
+        return () => { dead = true; };
+    }, [saved, engine]);
 
-            // Banner de destaque (hero): um filme/série com capa; busca a arte landscape no meta.
-            (async () => {
-                const cand = built.flatMap(r => r.metas).find((m: any) => (m.type === 'movie' || m.type === 'series') && m.poster && !/placehold/.test(m.poster))
-                    || built.flatMap(r => r.metas)[0];
-                if (!cand) return;
-                let image = cand.poster; let description = '';
-                try { const mm = await eng.getMeta(cand.type, cand.id); image = mm.meta?.background || mm.meta?.poster || cand.poster; description = mm.meta?.description || ''; } catch { }
-                setHero({ ...cand, image, description });
-            })();
-
-            // Posters dinâmicos (TMDB) — preenche capas faltantes em 2º plano (estilo Stremio).
-            if (s.options.tmdbApiKey) {
-                (async () => {
-                    const targets: { rowId: string; id: string }[] = [];
-                    for (const r of built) if (r.type === 'movie' || r.type === 'series')
-                        for (const m of r.metas) if (!m.poster || /placehold\.co/.test(m.poster)) targets.push({ rowId: r.id, id: m.id });
-                    let i = 0;
-                    const worker = async () => {
-                        while (i < targets.length) {
-                            const t = targets[i++];
-                            const url = await eng.getTmdbPosterFor(t.id).catch(() => null);
-                            if (url) for (const r of built) if (r.id === t.rowId) for (const m of r.metas) if (m.id === t.id) m.poster = url;
-                        }
-                    };
-                    await Promise.all(Array.from({ length: 4 }, worker));
-                    setRows(built.map(r => ({ ...r, metas: [...r.metas] })));
-                })();
-            }
-        } catch (e: any) {
-            setStatus('Erro: ' + (e?.message || e));
+    const buildVod = useCallback(async (eng: NexoEngine, opts: EngineOptions) => {
+        setVodLoading(true);
+        const cats: any[] = eng.getManifest().catalogs;
+        const pick = (id: string) => cats.find((c: any) => c.id === id);
+        const buildRows = async (defs: any[]) => (await Promise.all(defs.filter(Boolean).map(async (c: any) => {
+            try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return metas.length ? { id: c.id, type: c.type, name: c.name, metas: metas.slice(0, 30) } as Row : null; } catch { return null; }
+        }))).filter(Boolean) as Row[];
+        const mr = await buildRows([pick('nexotv_vod'), ...cats.filter((c: any) => c.id.startsWith('nexotv_vod_g_')).slice(0, 8)]);
+        const sr = await buildRows([pick('nexotv_series'), ...cats.filter((c: any) => c.id.startsWith('nexotv_series_g_')).slice(0, 6)]);
+        setMovieRows(mr); setSeriesRows(sr); setVodLoading(false);
+        // Posters TMDB faltantes em 2º plano (estilo Stremio).
+        if (opts.tmdbApiKey) {
+            const targets: { id: string }[] = [];
+            for (const r of [...mr, ...sr]) for (const m of r.metas) if (!m.poster || /placehold\.co/.test(m.poster)) targets.push({ id: m.id });
+            let i = 0;
+            const worker = async () => { while (i < targets.length) { const t = targets[i++]; const url = await eng.getTmdbPosterFor(t.id).catch(() => null); if (url) for (const r of [...mr, ...sr]) for (const m of r.metas) if (m.id === t.id) m.poster = url; } };
+            await Promise.all(Array.from({ length: 4 }, worker));
+            setMovieRows(mr.map(r => ({ ...r, metas: [...r.metas] }))); setSeriesRows(sr.map(r => ({ ...r, metas: [...r.metas] })));
         }
     }, []);
 
-    useEffect(() => { if (saved) boot(saved); }, [saved, boot]);
+    const buildChannels = useCallback(async (eng: NexoEngine) => {
+        setChanLoading(true);
+        const cats: any[] = eng.getManifest().catalogs;
+        const pick = (id: string) => cats.find((c: any) => c.id === id);
+        // "Jogos do Dia" como 1ª categoria (estilo TV), depois as categorias de canais.
+        const defs = [pick('nexotv_games'), ...cats.filter((c: any) => c.id.startsWith('iptv_channels_g_'))].filter(Boolean);
+        const results = await Promise.all(defs.map(async (c: any) => {
+            try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return { c, metas }; } catch { return { c, metas: [] as any[] }; }
+        }));
+        const flat: FlatItem[] = []; const first: Record<string, number> = {}; const cm: any[] = [];
+        for (const { c, metas } of results) {
+            if (!metas.length) continue;
+            first[c.id] = flat.length;
+            flat.push({ kind: 'header', name: c.name, catId: c.id });
+            for (const m of metas) flat.push({ kind: 'chan', name: m.name, catId: c.id, meta: m });
+            cm.push({ id: c.id, name: c.name, count: metas.length, sample: metas[0] });
+        }
+        setChanFlat(flat); setCatFirst(first); setChanCats(cm); setChanLoading(false);
+    }, []);
+
+    // Constrói a seção ao entrar nela (uma vez).
+    useEffect(() => {
+        if (!engine || !saved) return;
+        if ((section === 'movies' || section === 'series') && !builtRef.current.vod) { builtRef.current.vod = true; buildVod(engine, saved.options); }
+        if (section === 'channels' && !builtRef.current.channels) { builtRef.current.channels = true; buildChannels(engine); }
+    }, [section, engine, saved, buildVod, buildChannels]);
+
+    const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
+    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} />;
+
+    const cwFor = (t: string) => cw.filter((m: any) => m.type === t);
 
     return (
-        <div className="home" ref={homeRef} onKeyDown={onKey}>
-            <header className="topbar"><span className="brand-sm">RAJADA</span>
-                <button className="logout" onClick={() => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setRows([]); }}>sair</button>
+        <div className={`home ${section}`} ref={homeRef} onKeyDown={section === 'channels' ? undefined : onKey}>
+            <header className="topbar">
+                <button className="brand-sm" onClick={() => setSection('pick')}>RAJADA</button>
+                <nav className="tabs-top">
+                    <button className={section === 'movies' ? 'on' : ''} onClick={() => setSection('movies')}>Filmes</button>
+                    <button className={section === 'series' ? 'on' : ''} onClick={() => setSection('series')}>Séries</button>
+                    <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
+                </nav>
+                <button className="logout" onClick={logout}>sair</button>
             </header>
-
-            {hero && (
-                <section className="hero" style={{ backgroundImage: `url("${hero.image}")` }}>
-                    <div className="hero-grad" />
-                    <div className="hero-info">
-                        <h1 className="hero-title">{hero.name}</h1>
-                        {hero.description && <p className="hero-desc">{String(hero.description).split('\n')[0]}</p>}
-                        <button className="hero-play" onClick={() => openItem(hero)}>▶ Assistir</button>
-                    </div>
-                </section>
-            )}
 
             {status && <div className="status">{status}</div>}
 
-            {cw.length > 0 && (
-                <section className="row">
-                    <h2>Continuar Assistindo</h2>
-                    <div className="tiles">{cw.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
-                </section>
-            )}
-
-            {rows.map(row => (
-                <section className="row" key={row.id}>
-                    <h2>{row.name}</h2>
-                    <div className="tiles">
-                        {row.metas.map((m: any) => (
-                            <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />
-                        ))}
-                    </div>
-                </section>
-            ))}
+            {section === 'movies' && <Rows rows={movieRows} cw={cwFor('movie')} onOpen={openItem} loading={vodLoading} empty="Nenhum filme (provedor fora do ar?)" />}
+            {section === 'series' && <Rows rows={seriesRows} cw={cwFor('series')} onOpen={openItem} loading={vodLoading} empty="Nenhuma série (provedor fora do ar?)" />}
+            {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} catFirst={catFirst} loading={chanLoading} />}
 
             {picker && (
                 <div className="modal" onClick={() => setPicker(null)}>
@@ -218,9 +208,7 @@ function App() {
                         <h3>{picker.title}</h3>
                         <p className="modal-sub">Escolha a opção</p>
                         <div className="opts">
-                            {picker.options.map((o, i) => (
-                                <button key={i} className="opt" onClick={() => play(o.url, o.label)}>{o.label}</button>
-                            ))}
+                            {picker.options.map((o, i) => (<button key={i} className="opt" onClick={() => play(o.url, o.label)}>{o.label}</button>))}
                         </div>
                         <button className="modal-close" onClick={() => setPicker(null)}>fechar</button>
                     </div>
@@ -232,8 +220,182 @@ function App() {
     );
 }
 
-/** Player em tela cheia: HLS via hls.js; senão <video> nativo; fallback "abrir externo".
- *  No APK, um plugin ExoPlayer nativo pode substituir isto (ver README). */
+/** Tela inicial: 3 cards (Filmes / Séries / Canais). */
+function PickScreen({ onPick, onLogout, status }: { onPick: (s: Section) => void; onLogout: () => void; status: string }) {
+    return (
+        <div className="pick">
+            <h1 className="brand">RAJADA</h1>
+            <p className="pick-sub">O que você quer assistir?</p>
+            <div className="pick-cards">
+                <button className="pick-card pc-movies" onClick={() => onPick('movies')}><span className="pc-emoji">🎬</span><span>Filmes</span></button>
+                <button className="pick-card pc-series" onClick={() => onPick('series')}><span className="pc-emoji">📺</span><span>Séries</span></button>
+                <button className="pick-card pc-tv" onClick={() => onPick('channels')}><span className="pc-emoji">📡</span><span>Canais ao vivo</span></button>
+            </div>
+            {status && <div className="status">{status}</div>}
+            <button className="logout pick-logout" onClick={onLogout}>sair</button>
+        </div>
+    );
+}
+
+/** Fileiras estilo Netflix (filmes/séries). */
+function Rows({ rows, cw, onOpen, loading, empty }: { rows: Row[]; cw: any[]; onOpen: (m: any) => void; loading: boolean; empty: string }) {
+    if (loading && !rows.length) return <div className="status">Carregando…</div>;
+    if (!loading && !rows.length) return <div className="status">{empty}</div>;
+    return (
+        <>
+            {cw.length > 0 && (
+                <section className="row"><h2>Continuar Assistindo</h2>
+                    <div className="tiles">{cw.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+                </section>
+            )}
+            {rows.map(row => (
+                <section className="row" key={row.id}><h2>{row.name}</h2>
+                    <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+                </section>
+            ))}
+        </>
+    );
+}
+
+/** Canais ao vivo: escolhe categoria → lista de canais + player ao lado. Zapeia
+ *  ↑↓ atravessando categorias (divisor mostra onde cada uma acaba). Voltar volta
+ *  pras categorias. */
+function ChannelsView({ engine, cats, flat, catFirst, loading }: {
+    engine: NexoEngine; cats: { id: string; name: string; count: number; sample?: any }[]; flat: FlatItem[]; catFirst: Record<string, number>; loading: boolean;
+}) {
+    const [showCats, setShowCats] = useState(true);
+    const [idx, setIdx] = useState(-1);          // índice (no flat) do canal selecionado
+    const [url, setUrl] = useState('');
+    const [title, setTitle] = useState('');
+    const [opts, setOpts] = useState<any[]>([]);
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const stageRef = useRef<HTMLDivElement>(null);
+    const timer = useRef<any>(null);
+
+    const chanIdxs = useMemo(() => { const a: number[] = []; flat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [flat]);
+
+    const loadStream = useCallback(async (i: number) => {
+        const it = flat[i]; if (!it || it.kind !== 'chan') return;
+        setTitle(it.meta.name);
+        try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setUrl(streams[0]?.url || ''); }
+        catch { setOpts([]); setUrl(''); }
+    }, [engine, flat]);
+
+    const select = useCallback((i: number, now = false) => {
+        setIdx(i);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => loadStream(i), now ? 0 : 380);  // debounce no zapping
+        setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
+    }, [loadStream]);
+
+    const pickCat = (catId: string) => {
+        const h = catFirst[catId];
+        let fc = -1;
+        for (let i = h + 1; i < flat.length; i++) { if (flat[i].kind === 'chan') { fc = i; break; } if (flat[i].kind === 'header') break; }
+        setShowCats(false);
+        if (fc >= 0) select(fc, true);
+        setTimeout(() => stageRef.current?.focus(), 30);
+    };
+
+    const move = (dir: 1 | -1) => {
+        const pos = chanIdxs.indexOf(idx);
+        const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
+        select(chanIdxs[np]);
+    };
+    const onKey = (e: React.KeyboardEvent) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setShowCats(true); }
+    };
+
+    const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
+    const curCatName = idx >= 0 ? label(cats.find(c => c.id === flat[idx]?.catId)?.name || '') : '';
+
+    if (loading && !flat.length) return <div className="status">Carregando canais…</div>;
+    if (!loading && !flat.length) return <div className="status">Nenhum canal (provedor fora do ar?)</div>;
+
+    if (showCats) {
+        return (
+            <div className="chan-cats">
+                <h2 className="chan-h">Canais — escolha uma categoria</h2>
+                <div className="cat-grid">
+                    {cats.map(c => (
+                        <button key={c.id} className="cat-card" onClick={() => pickCat(c.id)}>
+                            <span className="cat-name">{label(c.name)}</span>
+                            <span className="cat-count">{c.count} canais</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="chan-live" ref={stageRef} tabIndex={0} onKeyDown={onKey}>
+            <aside className="chan-list">
+                <div className="chan-list-head">
+                    <button className="back" onClick={() => setShowCats(true)}>‹ Categorias</button>
+                    <span className="cur-cat">{curCatName}</span>
+                </div>
+                <div className="chan-scroll" ref={scrollRef}>
+                    {flat.map((f, i) => f.kind === 'header' ? (
+                        <div className="chan-divider" key={'h' + i}><span>{label(f.name)}</span></div>
+                    ) : (
+                        <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
+                            <img className="chan-ico" alt="" loading="lazy"
+                                src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
+                                onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
+                            <span className="chan-name">{f.meta.name}</span>
+                        </button>
+                    ))}
+                </div>
+            </aside>
+            <main className="chan-stage">
+                <LivePlayer url={url} title={title} />
+                <div className="chan-now">
+                    <span className="now-title">{title || 'Selecione um canal'}</span>
+                    {opts.length > 1 && (
+                        <div className="now-opts">
+                            {opts.map((o, i) => (
+                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)}>
+                                    {String(o.title || '').replace(/\s*-\s*Live$/i, '').trim() || ('Opção ' + (i + 1))}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </main>
+        </div>
+    );
+}
+
+/** Player embutido (canais ao vivo): troca de fonte ao zapear, sem fechar. */
+function LivePlayer({ url, title }: { url: string; title: string }) {
+    const ref = useRef<HTMLVideoElement>(null);
+    const [err, setErr] = useState(false);
+    useEffect(() => {
+        setErr(false);
+        const v = ref.current; if (!v || !url) return;
+        const isHls = /\.m3u8(\?|$)|\.ts(\?|$)/i.test(url) || url.includes('/live/');
+        let hls: Hls | null = null;
+        if (isHls && Hls.isSupported()) {
+            hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+            hls.loadSource(url); hls.attachMedia(v);
+            hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) setErr(true); });
+        } else { v.src = url; v.addEventListener('error', () => setErr(true), { once: true }); }
+        const p = v.play(); if (p && p.catch) p.catch(() => { });
+        return () => { try { hls?.destroy(); } catch { } };
+    }, [url]);
+    return (
+        <div className="live-player">
+            <video ref={ref} controls autoPlay playsInline className="live-video" />
+            {!url && <div className="live-empty">▶ Selecione um canal na lista</div>}
+            {err && url && (<div className="player-err">Não consegui tocar.<button onClick={() => window.open(url, '_blank')}>Abrir externo</button></div>)}
+        </div>
+    );
+}
+
+/** Player em tela cheia: HLS via hls.js; senão <video> nativo; fallback "abrir externo". */
 function Player({ url, title, onClose }: { url: string; title: string; onClose: () => void }) {
     const ref = useRef<HTMLVideoElement>(null);
     const [err, setErr] = useState(false);
@@ -295,16 +457,11 @@ function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
     const [fill, setFill] = useState(false); // logo com fundo opaco → preenche o tile (vira card limpo)
     const card = cardFor(meta.name);
     const src = chain[Math.min(idx, chain.length - 1)] || card;
-    // Logo vindo do proxy próprio (`/img?u=`) é CORS-limpo → dá pra ler no canvas e
-    // detectar o fundo. wsrv público não garante CORS → NÃO marca crossOrigin (a
-    // imagem carrega normal) e a detecção fica desligada (fica contain).
     const isProxyLogo = src.includes('/img?u=');
     const onErr = (e: React.SyntheticEvent<HTMLImageElement>) => {
         if (idx < chain.length - 1) setIdx(idx + 1);
         else if (e.currentTarget.src !== card) e.currentTarget.src = card;
     };
-    // Detecção de fundo embutido (cover vs contain) via canvas — sem requisição extra
-    // (usa a própria imagem exibida). Só roda p/ logo do proxy (CORS-limpo).
     const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
         if (shape !== 'square' || !isProxyLogo) return;
         const img = e.currentTarget;
@@ -321,8 +478,6 @@ function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
                 if (d[3] > 240) { opaque++; lum += 0.299 * d[0] + 0.587 * d[1] + 0.114 * d[2]; }
                 else if (d[3] < 24) transp++;
             }
-            // Preenche (cover) só se o fundo é OPACO e CLARO/colorido (briga com o card
-            // escuro). Fundo opaco escuro já blenda no card → fica contain (não corta).
             if (transp === 0 && opaque >= pts.length - 1 && lum / opaque > 48) setFill(true);
         } catch { /* tainted (sem CORS) → mantém contain */ }
     };

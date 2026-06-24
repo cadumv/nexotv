@@ -11,10 +11,62 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .tabs button { flex: 1; background: #16161c; color: #aaa; border: 1px solid #2a2a30; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; }
 .tabs button.on { background: #e50914; color: #fff; border-color: #e50914; }
 
+/* ---- Tela inicial (3 cards) ---- */
+.pick { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px; }
+.pick-sub { color: #bbb; margin: -8px 0 8px; font-size: 16px; }
+.pick-cards { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; }
+.pick-card { width: 240px; height: 150px; border: 0; border-radius: 16px; color: #fff; font-size: 22px; font-weight: 800; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; transition: transform .15s, box-shadow .15s; }
+.pick-card .pc-emoji { font-size: 40px; }
+.pick-card:hover, .pick-card:focus { transform: translateY(-4px) scale(1.03); box-shadow: 0 12px 36px rgba(0,0,0,.6); outline: none; }
+.pc-movies { background: linear-gradient(135deg, #b81d24, #e50914); }
+.pc-series { background: linear-gradient(135deg, #5b2a86, #8a3ffc); }
+.pc-tv { background: linear-gradient(135deg, #0a6e5e, #16b39b); }
+.pick-logout { margin-top: 14px; }
+
 /* ---- Home ---- */
-.topbar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; position: sticky; top: 0; background: linear-gradient(#0b0b0f, rgba(11,11,15,.6)); z-index: 5; }
-.brand-sm { font-weight: 800; letter-spacing: 1px; color: #e50914; font-size: 22px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 24px; position: sticky; top: 0; background: linear-gradient(#0b0b0f, rgba(11,11,15,.85)); z-index: 5; }
+.brand-sm { font-weight: 800; letter-spacing: 1px; color: #e50914; font-size: 22px; background: transparent; border: 0; cursor: pointer; }
+.tabs-top { display: flex; gap: 6px; }
+.tabs-top button { background: transparent; color: #cfcfd4; border: 0; padding: 8px 16px; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; }
+.tabs-top button:hover, .tabs-top button:focus { background: #1c1c24; outline: none; }
+.tabs-top button.on { background: #e50914; color: #fff; }
 .logout { background: transparent; color: #aaa; border: 0; cursor: pointer; }
+
+/* ---- Canais ao vivo (categorias) ---- */
+.chan-cats { padding: 20px 28px; }
+.chan-h { font-size: 20px; margin: 4px 0 16px; }
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.cat-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; background: #16161c; border: 1px solid #24242c; border-radius: 12px; padding: 16px; cursor: pointer; text-align: left; transition: transform .12s, border-color .12s; }
+.cat-card:hover, .cat-card:focus { transform: translateY(-2px); border-color: #e50914; outline: none; }
+.cat-name { font-size: 16px; font-weight: 700; color: #fff; }
+.cat-count { font-size: 12px; color: #8a8a93; }
+
+/* ---- Canais ao vivo (lista + player) ---- */
+.chan-live { display: grid; grid-template-columns: 340px 1fr; gap: 0; height: calc(100vh - 60px); }
+.chan-live:focus { outline: none; }
+.chan-list { display: flex; flex-direction: column; border-right: 1px solid #1d1d24; min-height: 0; background: #0e0e13; }
+.chan-list-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #1d1d24; }
+.chan-list-head .back { background: #1c1c24; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; font-weight: 700; }
+.chan-list-head .back:hover, .chan-list-head .back:focus { background: #e50914; outline: none; }
+.chan-list-head .cur-cat { color: #16b39b; font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chan-scroll { overflow-y: auto; flex: 1; padding: 6px; scrollbar-width: thin; }
+.chan-divider { position: sticky; top: 0; background: #0e0e13; color: #8a8a93; font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 10px 8px 6px; border-bottom: 1px solid #1d1d24; }
+.chan-divider span { display: inline-block; }
+.chan-row { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: 0; border-radius: 8px; padding: 8px; cursor: pointer; text-align: left; color: #d6d6db; }
+.chan-row:hover { background: #1a1a22; }
+.chan-row.on { background: #e50914; color: #fff; }
+.chan-ico { width: 38px; height: 38px; flex: 0 0 auto; object-fit: contain; background: #15151b; border-radius: 6px; }
+.chan-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chan-stage { display: flex; flex-direction: column; min-width: 0; background: #000; }
+.live-player { position: relative; flex: 1; min-height: 0; background: #000; display: flex; align-items: center; justify-content: center; }
+.live-video { width: 100%; height: 100%; background: #000; object-fit: contain; }
+.live-empty { position: absolute; color: #777; font-size: 18px; }
+.chan-now { padding: 12px 18px; background: #0b0b0f; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.now-title { font-weight: 800; font-size: 16px; }
+.now-opts { display: flex; gap: 8px; flex-wrap: wrap; }
+.now-opt { background: #1c1c24; color: #cfcfd4; border: 1px solid #2a2a32; border-radius: 999px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+.now-opt:hover, .now-opt:focus { border-color: #16b39b; outline: none; }
+.now-opt.on { background: #16b39b; color: #04211c; border-color: #16b39b; font-weight: 700; }
 .status { padding: 10px 24px; color: #bbb; }
 .row { padding: 0 0 14px; }
 .row h2 { font-size: 19px; margin: 0 0 4px 40px; font-weight: 700; }

@@ -29,29 +29,47 @@ await page.evaluate((c) => {
 }, cfg);
 await page.reload({ waitUntil: 'domcontentloaded' });
 
-// 2) espera as fileiras carregarem (dados do IPTV podem demorar).
-try { await page.waitForSelector('.tiles .tile img', { timeout: 90000 }); }
-catch { console.log('!! Nenhum tile apareceu em 90s — provedor fora do ar ou CORS?'); }
+const sleepN = (ms) => page.waitForTimeout(ms);
 
-// 2b) rola a página inteira em passos pra disparar TODAS as imagens lazy,
-//     senão o fullPage screenshot pega só as do topo carregadas.
+// 2) TELA INICIAL (3 cards).
+try { await page.waitForSelector('.pick-cards .pick-card', { timeout: 30000 }); } catch { console.log('!! pick screen não apareceu'); }
+await sleepN(1500);
+await page.screenshot({ path: join(OUT, '00-pick.png') });
+
+// 3) CANAIS → categorias.
+await page.click('.pc-tv').catch(() => { });
+try { await page.waitForSelector('.cat-grid .cat-card', { timeout: 90000 }); } catch { console.log('!! categorias de canais não apareceram'); }
+await sleepN(1500);
+await page.screenshot({ path: join(OUT, '01-categorias.png') });
+
+// 4) entra numa categoria → lista + player ao vivo.
+const cards = await page.$$('.cat-grid .cat-card');
+if (cards.length) {
+    // pega uma categoria com canais "normais" (não a 1ª que é Jogos) se houver
+    await (cards[Math.min(2, cards.length - 1)]).click();
+    try { await page.waitForSelector('.chan-live .chan-row', { timeout: 30000 }); } catch { }
+    await sleepN(6000); // deixa logos/stream resolverem
+    await page.screenshot({ path: join(OUT, '02-canais-ao-vivo.png') });
+    // zapa 3 canais pra baixo (testa navegação)
+    const stage = await page.$('.chan-live'); if (stage) await stage.focus();
+    for (let i = 0; i < 3; i++) { await page.keyboard.press('ArrowDown'); await sleepN(500); }
+    await sleepN(2000);
+    await page.screenshot({ path: join(OUT, '03-zapping.png') });
+}
+
+// 5) FILMES (fileiras de pôster) pra conferir que continuam ok.
+await page.click('.tabs-top button:has-text("Filmes")').catch(() => { });
+try { await page.waitForSelector('.tiles .tile img', { timeout: 60000 }); } catch { }
 await page.evaluate(async () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const h = document.body.scrollHeight;
-    for (let y = 0; y < h; y += 700) { window.scrollTo(0, y); await sleep(120); }
+    for (let y = 0; y < h; y += 700) { window.scrollTo(0, y); await sleep(100); }
     window.scrollTo(0, 0); await sleep(200);
 });
-await page.waitForTimeout(12000); // deixa logos (wsrv) resolverem após o scroll
+await sleepN(6000);
+await page.screenshot({ path: join(OUT, '04-filmes.png'), fullPage: true });
 
-// 3) print da home inteira + crops de alta-res das primeiras fileiras.
-await page.screenshot({ path: join(OUT, '00-home.png'), fullPage: true });
-const tileRowsEls = await page.$$('.tiles');
-for (let i = 0; i < Math.min(7, tileRowsEls.length); i++) {
-    try { await tileRowsEls[i].screenshot({ path: join(OUT, `row-${String(i).padStart(2, '0')}.png`) }); } catch { }
-}
-
-// 4) diagnóstico por fileira: nome da row, e por tile a classe/dimensões reais
-//    + se a imagem renderizou (naturalWidth) + aspect do tile vs aspect da imagem.
+// 6) diagnóstico das fileiras de filmes + da lista de canais.
 const report = await page.evaluate(() => {
     const rows = [...document.querySelectorAll('.row, section.row')];
     const out = [];
