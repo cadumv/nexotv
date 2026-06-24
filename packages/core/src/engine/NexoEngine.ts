@@ -26,6 +26,8 @@ export interface EngineOptions {
     epgFetchTimeoutMs?: number;
     fetchTimeoutMs?: number;
     epgMaxBytes?: number;
+    /** Banco de logos opcional (compact(nome) → url) — fallback p/ canais sem logo. */
+    logoBank?: Record<string, string> | null;
     log?: (level: 'debug' | 'warn' | 'error', msg: string, extra?: any) => void;
 }
 
@@ -287,6 +289,12 @@ export class NexoEngine {
         const idx = this._ensureLogoIndex();
         const base = this._channelBaseName(name).toLowerCase();
         if (idx.byBase.has(base)) return idx.byBase.get(base)!;
+        // banco externo opcional (iptv-org etc.), por nome compacto
+        const bank = this.options.logoBank;
+        if (bank) {
+            const cb = compact(base) || compact(name);
+            if (cb && bank[cb]) return bank[cb];
+        }
         const w = base.split(' ')[0] || '';
         if (w.length >= 3 && idx.byWord.has(w)) return idx.byWord.get(w)!;
         return null;
