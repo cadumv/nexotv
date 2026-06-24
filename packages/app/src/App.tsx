@@ -386,6 +386,17 @@ function qualityRank(title: string): number {
     const t = String(title || '');
     if (/fhd|1080/i.test(t)) return 3; if (/\bhd\b|720/i.test(t)) return 2; if (/\bsd\b|480/i.test(t)) return 1; return 0;
 }
+// Opções de stream distintas (por URL), p/ CANAIS: cada variante (FHD/HD/SD,
+// feeds) vira um chip selecionável. Mantém todas como fallback ao escolher uma.
+function streamOptions(streams: any[]): { label: string; url: string }[] {
+    const seen = new Set<string>(); const out: { label: string; url: string }[] = [];
+    for (const s of streams || []) {
+        if (!s?.url || seen.has(s.url)) continue; seen.add(s.url);
+        const label = String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || ('Opção ' + (out.length + 1));
+        out.push({ label, url: s.url });
+    }
+    return out;
+}
 // Agrupa streams por marca, MAS mantém todos os feeds de cada marca (ordenados
 // pela melhor qualidade) — viram a cadeia de fallback automático do player.
 function dedupStreams(streams: any[]): { label: string; urls: string[] }[] {
@@ -753,15 +764,20 @@ function ChannelsView({ engine, cats, flat, loading }: {
                             ? <span className="now-epg"><b>AGORA:</b> {epg.now}{epg.next ? <> <span className="now-epg-next">· a seguir: {epg.next}</span></> : ''}</span>
                             : title ? <span className="now-epg dim">● AO VIVO</span> : null}
                     </div>
-                    {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
-                        <div className="now-opts">
-                            {ds.map((o, i) => (
-                                <button key={i} className={`now-opt${o.urls[0] === sources[0] ? ' on' : ''}`} onClick={() => setSources(o.urls)} onFocus={focusScroll}>
-                                    {o.label}
-                                </button>
-                            ))}
-                        </div>
-                    ); })()}
+                    {(() => {
+                        const list = streamOptions(opts); if (list.length <= 1) return null;
+                        const others = list.map(o => o.url);
+                        return (
+                            <div className="now-opts">
+                                {list.map((o, i) => (
+                                    <button key={i} className={`now-opt${o.url === sources[0] ? ' on' : ''}`} onFocus={focusScroll}
+                                        onClick={() => setSources([o.url, ...others.filter(u => u !== o.url)])}>
+                                        {o.label}
+                                    </button>
+                                ))}
+                            </div>
+                        );
+                    })()}
                 </div>
             </main>
         </div>
