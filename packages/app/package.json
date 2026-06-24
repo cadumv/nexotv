@@ -4,6 +4,7 @@
   "description": "Rajada — app (UI estilo Netflix + engine do core, empacotado via Capacitor)",
   "private": true,
   "type": "module",
+  "author": "Rajada",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
@@ -23,6 +24,7 @@
     "directories": {
       "output": "dist-electron"
     },
+    "electronDist": "C:/Users/caduv/projects/nexotv/node_modules/.pnpm/electron@42.4.1/node_modules/electron/dist",
     "files": [
       "electron/**/*",
       "dist/**/*",
