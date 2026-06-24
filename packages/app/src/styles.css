@@ -11,13 +11,13 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .tabs button { flex: 1; background: #16161c; color: #aaa; border: 1px solid #2a2a30; padding: 10px; border-radius: 8px; cursor: pointer; font-weight: 600; }
 .tabs button.on { background: #e50914; color: #fff; border-color: #e50914; }
 
-/* ---- Tela inicial: 2 cards com ilustração ---- */
-.pick { min-height: 100vh; display: flex; flex-direction: column; }
-.pick-top { display: flex; justify-content: space-between; align-items: center; padding: 16px 28px; }
-.pick-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; padding: 0 24px 40px; }
-.pick-sub { color: #f2f2f5; font-size: 30px; font-weight: 800; letter-spacing: .3px; margin: 0; }
-.pick-cards { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
-.pick-card { position: relative; width: 480px; height: 300px; max-width: 90vw; border: 0; border-radius: 16px; overflow: hidden; cursor: pointer; padding: 0;
+/* ---- Tela inicial: pirâmide invertida, SEMPRE cabe na tela (sem rolar) ---- */
+.pick { height: 100vh; max-height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.pick-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 28px; flex: 0 0 auto; }
+.pick-body { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(12px, 2vh, 22px); padding: 0 24px 14px; }
+.pick-sub { color: #f2f2f5; font-size: clamp(20px, 3vh, 30px); font-weight: 800; letter-spacing: .3px; margin: 0; }
+.pick-cards { display: flex; gap: clamp(16px, 2vw, 30px); flex-wrap: wrap; justify-content: center; }
+.pick-card { position: relative; width: clamp(360px, 44vw, 560px); height: clamp(200px, 35vh, 340px); max-width: 92vw; border: 0; border-radius: 16px; overflow: hidden; cursor: pointer; padding: 0;
     background-size: cover; background-position: center; box-shadow: 0 14px 44px rgba(0,0,0,.6);
     transition: transform .2s, box-shadow .2s, outline-color .2s; outline: 3px solid transparent; }
 .pick-card:hover, .pick-card:focus { transform: translateY(-8px) scale(1.03); box-shadow: 0 30px 80px rgba(0,0,0,.85); outline-color: #fff; }
@@ -30,9 +30,9 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .pc-grad { position: absolute; inset: 0; pointer-events: none;
     background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.45) 38%, rgba(0,0,0,.05) 62%, transparent 100%),
                 linear-gradient(90deg, rgba(0,0,0,.55) 0%, transparent 45%); }
-.pc-foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 24px 22px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
-.pc-label { font-size: 30px; font-weight: 900; letter-spacing: .3px; color: #fff; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.95); }
-.pc-sub2 { font-size: 14px; font-weight: 600; color: #d6d6db; text-shadow: 0 1px 8px rgba(0,0,0,.9); }
+.pc-foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 20px clamp(12px, 2vh, 22px); display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.pc-label { font-size: clamp(20px, 3vh, 30px); font-weight: 900; letter-spacing: .3px; color: #fff; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.95); }
+.pc-sub2 { font-size: clamp(11px, 1.6vh, 14px); font-weight: 600; color: #d6d6db; text-shadow: 0 1px 8px rgba(0,0,0,.9); }
 .pc-live { position: absolute; top: 16px; left: 16px; background: #e50914; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 1.2px; padding: 5px 11px; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
 .pc-play { position: absolute; top: 44%; left: 50%; transform: translate(-50%,-50%) scale(.6); width: 74px; height: 74px; border-radius: 50%;
     background: rgba(20,20,24,.55); backdrop-filter: blur(3px); border: 2.5px solid rgba(255,255,255,.85); color: #fff; font-size: 28px;

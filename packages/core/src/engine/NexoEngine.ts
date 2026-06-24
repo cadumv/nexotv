@@ -646,6 +646,30 @@ export class NexoEngine {
         const k = stripAccents(name || '').toLowerCase().trim();
         return NexoEngine._TEAM_PT[k] || name;
     }
+    // Nome de competição amigável (PT-BR) a partir do nome cru do Sofascore.
+    _prettyTournament(raw: string): string {
+        const t = stripAccents(raw || '').toLowerCase();
+        if (!t) return '';
+        if (t.includes('world cup') || t.includes('copa do mundo')) return t.includes('club') ? 'Mundial de Clubes' : 'Copa do Mundo';
+        if (t.includes('copa america') || t.includes('conmebol america')) return 'Copa America';
+        if (t.includes('libertadores')) return 'Libertadores';
+        if (t.includes('sudamericana') || t.includes('sul-americana')) return 'Sul-Americana';
+        if (t.includes('champions')) return 'Champions League';
+        if (t.includes('europa league')) return 'Europa League';
+        if (t.includes('euro') && !t.includes('europa')) return 'Eurocopa';
+        if (t.includes('premier league')) return 'Premier League';
+        if (t.includes('laliga') || t.includes('la liga')) return 'La Liga';
+        if (t.includes('serie a') && (t.includes('bra') || t.includes('betano'))) return 'Brasileirao';
+        if (t.includes('serie b') && t.includes('bra')) return 'Brasileirao Serie B';
+        if (t.includes('copa do brasil')) return 'Copa do Brasil';
+        if (t.includes('serie a') && t.includes('ita')) return 'Italiano - Serie A';
+        if (t.includes('bundesliga')) return 'Bundesliga';
+        if (t.includes('ligue 1')) return 'Ligue 1';
+        if (t.includes('carioca') || t.includes('paulista') || t.includes('mineiro') || t.includes('gaucho') || t.includes('estadual')) return 'Estaduais';
+        if (t.includes('eliminatorias') || t.includes('qualification') || t.includes('qualifier')) return 'Eliminatorias';
+        if (t.includes('amistoso') || t.includes('friendly')) return 'Amistosos';
+        return stripAccents(raw).replace(/\b(conmebol|uefa|fifa|concacaf)\b/gi, '').replace(/\s+/g, ' ').trim() || stripAccents(raw);
+    }
 
     private _agendaConfig(): AgendaConfig {
         return {
@@ -755,7 +779,7 @@ export class NexoEngine {
             description: `${when} - ${opts}`, releaseInfo: `${when} - ${opts}`,
             genres: [stripAccents(primary.name || '')].filter(Boolean),
             // extras p/ a tela de Jogos (agrupar por competição, separar ao vivo):
-            tournament: stripAccents(g.tournament || ''), live, startMs: g.start,
+            tournament: this._prettyTournament(g.tournament || ''), live, startMs: g.start,
         };
     }
 

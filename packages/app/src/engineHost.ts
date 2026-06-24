@@ -44,12 +44,17 @@ export async function tmdbBackdrop(query: string): Promise<string | null> {
     } catch { return null; }
 }
 
+// URL do Worker /agenda (RapidAPI Sofascore) — build-time (.env.local, fora do
+// GitHub), pra os Jogos preencherem sem o usuário digitar.
+const DEFAULT_AGENDA = (import.meta as any).env?.VITE_AGENDA_URL || null;
+
 export async function createEngine(config: AddonConfig, options: EngineOptions): Promise<NexoEngine> {
     const http = await makeHttp();
     // Banco de logos (iptv-org BR, bundlado) como fallback automático + TMDB padrão.
     const opts: EngineOptions = {
         ...options,
         tmdbApiKey: options.tmdbApiKey || DEFAULT_TMDB,
+        sofascoreAgendaUrl: options.sofascoreAgendaUrl || DEFAULT_AGENDA,
         logoBank: options.logoBank || (logoBank as Record<string, string>),
         logoProxyBase: deriveLogoProxy(options),
     };
