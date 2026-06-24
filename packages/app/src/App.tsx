@@ -68,6 +68,7 @@ function App() {
     const [chanFlat, setChanFlat] = useState<FlatItem[]>([]);
     const [catFirst, setCatFirst] = useState<Record<string, number>>({});
     const [chanLoading, setChanLoading] = useState(false);
+    const [pickArt, setPickArt] = useState<{ movies?: string; series?: string; chanLogos?: string[] }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
@@ -177,10 +178,37 @@ function App() {
         if (section === 'channels' && !builtRef.current.channels) { builtRef.current.channels = true; buildChannels(engine); }
     }, [section, engine, saved, buildVod, buildChannels]);
 
+    // Arte dos cards da tela inicial (estilo Netflix): pôster real de filme/série +
+    // colagem de logos de canais. Buscado em 2º plano (cards mostram gradiente até lá).
+    useEffect(() => {
+        if (!engine) return;
+        let dead = false;
+        (async () => {
+            try {
+                const cats: any[] = engine.getManifest().catalogs;
+                const findId = (id: string) => cats.find((c: any) => c.id === id);
+                const firstPoster = async (catId: string) => {
+                    const c = findId(catId); if (!c) return undefined;
+                    const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
+                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
+                    if (withP) return withP.poster;
+                    if (metas[0]) { const u = await engine.getTmdbPosterFor(metas[0].id).catch(() => null); return u || metas[0].poster; }
+                    return undefined;
+                };
+                const [movies, series] = await Promise.all([firstPoster('nexotv_vod'), firstPoster('nexotv_series')]);
+                let chanLogos: string[] = [];
+                const ch = cats.find((c: any) => c.id.startsWith('iptv_channels_g_'));
+                if (ch) { const { metas } = await engine.getCatalog({ type: ch.type, id: ch.id }); chanLogos = metas.slice(0, 4).map((m: any) => (Array.isArray(m.posterChain) && m.posterChain[0]) || m.poster).filter(Boolean); }
+                if (!dead) setPickArt({ movies, series, chanLogos });
+            } catch { /* mantém gradiente */ }
+        })();
+        return () => { dead = true; };
+    }, [engine]);
+
     const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
-    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} />;
+    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} art={pickArt} />;
 
     const cwFor = (t: string) => cw.filter((m: any) => m.type === t);
 
@@ -220,19 +248,36 @@ function App() {
     );
 }
 
-/** Tela inicial: 3 cards (Filmes / Séries / Canais). */
-function PickScreen({ onPick, onLogout, status }: { onPick: (s: Section) => void; onLogout: () => void; status: string }) {
+/** Tela inicial estilo Netflix: 3 cards com arte real (pôster de filme/série,
+ *  colagem de logos pros canais), gradiente, título embaixo e zoom no hover. */
+function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { movies?: string; series?: string; chanLogos?: string[] } }) {
+    const card = (sec: Section, label: string, emoji: string, bg?: string, logos?: string[]) => (
+        <button className={`pick-card pc-${sec}`} onClick={() => onPick(sec)}
+            style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
+            {logos && logos.length > 0 && (
+                <div className="pc-collage">
+                    {logos.slice(0, 4).map((l, i) => (
+                        <img key={i} src={l} alt="" loading="lazy" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
+                    ))}
+                </div>
+            )}
+            <div className="pc-grad" />
+            <span className="pc-play">▶</span>
+            <div className="pc-foot"><span className="pc-emoji">{emoji}</span><span className="pc-label">{label}</span></div>
+        </button>
+    );
     return (
         <div className="pick">
-            <h1 className="brand">RAJADA</h1>
-            <p className="pick-sub">O que você quer assistir?</p>
-            <div className="pick-cards">
-                <button className="pick-card pc-movies" onClick={() => onPick('movies')}><span className="pc-emoji">🎬</span><span>Filmes</span></button>
-                <button className="pick-card pc-series" onClick={() => onPick('series')}><span className="pc-emoji">📺</span><span>Séries</span></button>
-                <button className="pick-card pc-tv" onClick={() => onPick('channels')}><span className="pc-emoji">📡</span><span>Canais ao vivo</span></button>
+            <header className="pick-top"><span className="brand-sm">RAJADA</span><button className="logout" onClick={onLogout}>sair</button></header>
+            <div className="pick-body">
+                <h2 className="pick-sub">O que você quer assistir?</h2>
+                <div className="pick-cards">
+                    {card('movies', 'Filmes', '🎬', art.movies)}
+                    {card('series', 'Séries', '📺', art.series)}
+                    {card('channels', 'Canais ao vivo', '📡', undefined, art.chanLogos)}
+                </div>
+                {status && <div className="status">{status}</div>}
             </div>
-            {status && <div className="status">{status}</div>}
-            <button className="logout pick-logout" onClick={onLogout}>sair</button>
         </div>
     );
 }
