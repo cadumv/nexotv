@@ -404,17 +404,24 @@ function dedupStreams(streams: any[]): { label: string; urls: string[] }[] {
 // Rola o chip focado pra dentro da vista (D-pad na TV / Tab na web).
 const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ inline: 'center', block: 'nearest' });
 
-// Agrupa os jogos: ao vivo primeiro, depois por competição (ordenado por horário).
-function groupGames(metas: any[]): { live: any[]; ordered: [string, any[]][] } {
+// Agrupa os jogos: ao vivo → próximos (hoje+amanhã) → por competição. Tudo
+// ordenado por data (mais cedo primeiro); competição ordenada pelo jogo + cedo.
+function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [string, any[]][] } {
+    const byTime = (a: any, b: any) => (a.startMs || 0) - (b.startMs || 0);
     const live = metas.filter(m => m.live);
     const rest = metas.filter(m => !m.live);
+    // Janela "próximos": de hoje 00h até o fim de amanhã.
+    const today0 = new Date(); today0.setHours(0, 0, 0, 0);
+    const from = today0.getTime(); const to = from + 2 * 86400000;
+    const upcoming = rest.filter(m => (m.startMs || 0) >= from && (m.startMs || 0) < to).sort(byTime);
     const groups = new Map<string, any[]>();
     for (const m of rest) { const k = (m.tournament || '').trim() || 'Outros jogos'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(m); }
+    for (const list of groups.values()) list.sort(byTime);
     const ordered = [...groups.entries()].sort((a, b) => {
         if (a[0] === 'Outros jogos') return 1; if (b[0] === 'Outros jogos') return -1;
         return (a[1][0]?.startMs || 0) - (b[1][0]?.startMs || 0);
     });
-    return { live, ordered };
+    return { live, upcoming, ordered };
 }
 
 /** Jogos ao vivo: grade (hero + fileiras por competição) → ao clicar, abre o
@@ -424,9 +431,10 @@ function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[
     if (loading && !metas.length) return <div className="status">Carregando jogos…</div>;
     if (!loading && !metas.length) return <div className="status">Nenhum jogo encontrado agora. Confira mais tarde.</div>;
     if (watch) return <GameStage engine={engine} metas={metas} start={watch} onBack={() => setWatch(null)} />;
-    const { live, ordered } = groupGames(metas);
-    const featured = live[0] || metas[0];          // hero: ao vivo, senão o próximo
+    const { live, upcoming, ordered } = groupGames(metas);
+    const featured = live[0] || upcoming[0] || metas[0];   // hero: ao vivo, senão o mais cedo
     const liveRest = featured && featured.live ? live.slice(1) : live;
+    const up = upcoming.filter((m: any) => m !== featured);
     const grpFiltered = ordered.map(([n, l]) => [n, l.filter((m: any) => m !== featured)] as [string, any[]]).filter(([, l]) => l.length);
     return (
         <div className="games-grid">
@@ -438,6 +446,11 @@ function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[
             {liveRest.length > 0 && (
                 <section className="row"><h2><span className="dot-live" /> Ao vivo agora</h2>
                     <div className="tiles">{liveRest.map((m: any) => <GameCard key={m.id} meta={m} onPlay={() => setWatch(m)} />)}</div>
+                </section>
+            )}
+            {up.length > 0 && (
+                <section className="row"><h2>⏰ Próximos jogos</h2>
+                    <div className="tiles">{up.map((m: any) => <GameCard key={'up' + m.id} meta={m} onPlay={() => setWatch(m)} />)}</div>
                 </section>
             )}
             {grpFiltered.map(([name, list]) => (
@@ -478,9 +491,10 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
 
     // Lista plana com divisores (ao vivo + por competição) — espelha a dos canais.
     const gflat = useMemo(() => {
-        const { live, ordered } = groupGames(metas);
-        const out: { kind: 'header' | 'game'; name: string; meta?: any; live?: boolean }[] = [];
+        const { live, upcoming, ordered } = groupGames(metas);
+        const out: { kind: 'header' | 'game'; name: string; meta?: any; live?: boolean; icon?: string }[] = [];
         if (live.length) { out.push({ kind: 'header', name: 'Ao vivo agora', live: true }); live.forEach(m => out.push({ kind: 'game', name: m.name, meta: m })); }
+        if (upcoming.length) { out.push({ kind: 'header', name: 'Próximos jogos', icon: '⏰' }); upcoming.forEach(m => out.push({ kind: 'game', name: m.name, meta: m })); }
         ordered.forEach(([name, list]) => { out.push({ kind: 'header', name }); list.forEach(m => out.push({ kind: 'game', name: m.name, meta: m })); });
         return out;
     }, [metas]);
@@ -532,7 +546,7 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
                 </div>
                 <div className="chan-scroll" ref={scrollRef}>
                     {gflat.map((f, i) => f.kind === 'header' ? (
-                        <div className="chan-divider" key={'h' + i}><span>{f.live ? <><span className="dot-live" /> {f.name}</> : <>{compEmoji(f.name)} {f.name}</>}</span></div>
+                        <div className="chan-divider" key={'h' + i}><span>{f.live ? <><span className="dot-live" /> {f.name}</> : <>{f.icon || compEmoji(f.name)} {f.name}</>}</span></div>
                     ) : (
                         <button key={i} data-i={i} className={`chan-row game-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
                             <GameRow meta={f.meta} />
