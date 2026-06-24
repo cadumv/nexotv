@@ -681,9 +681,11 @@ function ChannelsView({ engine, cats, flat, loading }: {
         flat.filter(f => f.kind === 'chan')
             .slice().sort((a, b) => score(b) - score(a))
             .forEach(f => { if (score(f) > 0 && !seen.has(f.meta.name) && top.length < 12) { seen.add(f.meta.name); top.push(f); } });
-        // Favoritos (reativo): canais marcados que existem na lista atual.
+        // Favoritos (reativo): canais marcados que existem na lista atual, sem duplicar
+        // (um mesmo canal pode aparecer em várias categorias).
         const favMap = loadFav();
-        const favs = flat.filter(f => f.kind === 'chan' && favMap[f.meta.id]);
+        const favSeen = new Set<string>(); const favs: FlatItem[] = [];
+        for (const f of flat) { if (f.kind === 'chan' && favMap[f.meta.id] && !favSeen.has(f.meta.id)) { favSeen.add(f.meta.id); favs.push(f); } }
         let vflat = flat; let vcats = cats;
         const prefixFlat: FlatItem[] = []; const prefixCats: any[] = [];
         if (favs.length) {
@@ -791,16 +793,28 @@ function ChannelsView({ engine, cats, flat, loading }: {
                             </button>
                         ))
                     ) : (
-                        vflat.map((f, i) => f.kind === 'header' ? (
-                            <div className="chan-divider" data-h={i} key={'h' + i}><span>{label(f.name)}</span></div>
-                        ) : (
-                            <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
-                                <img className="chan-ico" alt="" loading="lazy"
-                                    src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
-                                    onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
-                                <span className="chan-name">{f.meta.name}</span>
-                            </button>
-                        ))
+                        // Agrupa por seção: cada cabeçalho + suas linhas num container, pra o
+                        // sticky ficar preso à seção e NÃO empilhar com o próximo (o "buraco").
+                        (() => {
+                            const secs: { hi: number; header: FlatItem; items: { f: FlatItem; i: number }[] }[] = [];
+                            vflat.forEach((f, i) => {
+                                if (f.kind === 'header') secs.push({ hi: i, header: f, items: [] });
+                                else if (secs.length) secs[secs.length - 1].items.push({ f, i });
+                            });
+                            return secs.map(sec => (
+                                <div className="chan-section" key={'s' + sec.hi}>
+                                    <div className="chan-divider" data-h={sec.hi}><span>{label(sec.header.name)}</span></div>
+                                    {sec.items.map(({ f, i }) => (
+                                        <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
+                                            <img className="chan-ico" alt="" loading="lazy"
+                                                src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
+                                                onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
+                                            <span className="chan-name">{f.meta.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            ));
+                        })()
                     )}
                 </div>
             </aside>
