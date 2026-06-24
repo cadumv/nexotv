@@ -429,7 +429,7 @@ function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[
     const liveRest = featured && featured.live ? live.slice(1) : live;
     const grpFiltered = ordered.map(([n, l]) => [n, l.filter((m: any) => m !== featured)] as [string, any[]]).filter(([, l]) => l.length);
     return (
-        <div className="games">
+        <div className="games-grid">
             {featured && (
                 <div className="games-hero">
                     <GameCard meta={featured} onPlay={() => setWatch(featured)} hero />

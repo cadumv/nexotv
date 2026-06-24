@@ -168,8 +168,10 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .player-err button { margin-left: 10px; background: #e50914; color: #fff; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
 
 /* ---- Jogos: cards desenhados (sem placeholder de texto) ---- */
-.games { padding-top: 8px; }
-.games .row h2 { display: flex; align-items: center; gap: 8px; }
+/* O topbar fica fixo; a GRADE de jogos rola internamente (mouse/touch na web,
+   foco do controle na TV). Nome próprio p/ não colidir com o wrapper .home.games. */
+.games-grid { padding-top: 8px; flex: 1; min-height: 0; overflow-y: auto; }
+.games-grid .row h2 { display: flex; align-items: center; gap: 8px; }
 .dot-live { width: 11px; height: 11px; border-radius: 50%; background: #e50914; box-shadow: 0 0 0 0 rgba(229,9,20,.6); animation: pulse 1.6s infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(229,9,20,.6); } 70% { box-shadow: 0 0 0 9px rgba(229,9,20,0); } 100% { box-shadow: 0 0 0 0 rgba(229,9,20,0); } }
 
