@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
-import { createEngine } from './engineHost';
+import { createEngine, tmdbBackdrop } from './engineHost';
 
 const LS_KEY = 'rajada.config.v1';
 
@@ -68,6 +68,7 @@ function App() {
     const [chanFlat, setChanFlat] = useState<FlatItem[]>([]);
     const [catFirst, setCatFirst] = useState<Record<string, number>>({});
     const [chanLoading, setChanLoading] = useState(false);
+    const [pickArt, setPickArt] = useState<{ vod?: string; live?: string }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
@@ -177,10 +178,35 @@ function App() {
         if (section === 'channels' && !builtRef.current.channels) { builtRef.current.channels = true; buildChannels(engine); }
     }, [section, engine, saved, buildVod, buildChannels]);
 
+    // Arte cinematográfica dos cards (estilo Netflix): backdrop real de um filme da
+    // biblioteca + foto de futebol (TMDB). Em 2º plano — cards mostram o gradiente até lá.
+    useEffect(() => {
+        if (!engine) return;
+        let dead = false;
+        (async () => {
+            let vod: string | undefined;
+            try {
+                const cats: any[] = engine.getManifest().catalogs;
+                const c = cats.find((x: any) => x.id === 'nexotv_vod');
+                if (c) {
+                    const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
+                    for (const m of metas.slice(0, 4)) {
+                        const mm = await engine.getMeta('movie', m.id).catch(() => null);
+                        const bg = mm?.meta?.background;
+                        if (bg && !/placehold/.test(bg)) { vod = bg; break; }
+                    }
+                }
+            } catch { /* fallback gradiente */ }
+            const live = (await tmdbBackdrop('futebol').catch(() => null)) || (await tmdbBackdrop('soccer stadium').catch(() => null)) || undefined;
+            if (!dead) setPickArt({ vod, live });
+        })();
+        return () => { dead = true; };
+    }, [engine]);
+
     const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
-    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} />;
+    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} art={pickArt} />;
 
     const cwAll = cw.filter((m: any) => m.type === 'movie' || m.type === 'series');
 
@@ -240,83 +266,32 @@ function App() {
     );
 }
 
-/** Tela inicial: 2 cards grandes com ILUSTRAÇÃO temática (pipoca = Filmes e Séries;
- *  bola/AO VIVO = Canais). SVG embutido (nítido, nunca quebra). */
-function PickScreen({ onPick, onLogout, status }: { onPick: (s: Section) => void; onLogout: () => void; status: string }) {
+/** Tela inicial estilo Netflix: 2 billboards landscape com BACKDROP real (foto
+ *  cinematográfica), gradiente forte e tipografia premium. Fallback: gradiente. */
+function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { vod?: string; live?: string } }) {
     return (
         <div className="pick">
             <header className="pick-top"><span className="brand-sm">RAJADA</span><button className="logout" onClick={onLogout}>sair</button></header>
             <div className="pick-body">
                 <h2 className="pick-sub">O que você quer assistir?</h2>
                 <div className="pick-cards">
-                    <button className="pick-card pc-vod" onClick={() => onPick('vod')}>
-                        <div className="pc-art"><PopcornArt /></div>
+                    <button className={`pick-card pc-vod${art.vod ? ' has-art' : ''}`} onClick={() => onPick('vod')}
+                        style={art.vod ? { backgroundImage: `url("${art.vod}")` } : undefined}>
                         <div className="pc-grad" />
                         <span className="pc-play">▶</span>
-                        <div className="pc-foot"><span className="pc-label">Filmes e Séries</span></div>
+                        <div className="pc-foot"><span className="pc-label">Filmes e Séries</span><span className="pc-sub2">Catálogo completo</span></div>
                     </button>
-                    <button className="pick-card pc-channels" onClick={() => onPick('channels')}>
-                        <div className="pc-art"><LiveBallArt /></div>
+                    <button className={`pick-card pc-channels${art.live ? ' has-art' : ''}`} onClick={() => onPick('channels')}
+                        style={art.live ? { backgroundImage: `url("${art.live}")` } : undefined}>
                         <div className="pc-grad" />
                         <span className="pc-live">● AO VIVO</span>
                         <span className="pc-play">▶</span>
-                        <div className="pc-foot"><span className="pc-label">Canais ao vivo</span></div>
+                        <div className="pc-foot"><span className="pc-label">Canais ao vivo</span><span className="pc-sub2">Jogos e TV agora</span></div>
                     </button>
                 </div>
                 {status && <div className="status">{status}</div>}
             </div>
         </div>
-    );
-}
-
-/** Ilustração: balde de pipoca de cinema (Filmes e Séries). */
-function PopcornArt() {
-    return (
-        <svg viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
-            <g>
-                {/* pipoca */}
-                <g fill="#fff3cf">
-                    <circle cx="74" cy="66" r="15" /><circle cx="96" cy="54" r="18" /><circle cx="118" cy="64" r="16" />
-                    <circle cx="132" cy="78" r="12" /><circle cx="62" cy="80" r="12" />
-                    <circle cx="86" cy="72" r="14" /><circle cx="108" cy="76" r="13" />
-                </g>
-                <g fill="#ffe49b">
-                    <circle cx="96" cy="60" r="9" /><circle cx="118" cy="70" r="8" /><circle cx="78" cy="74" r="8" />
-                </g>
-                {/* balde com listras */}
-                <path d="M62 86 L138 86 L128 176 L72 176 Z" fill="#fafafa" />
-                <g fill="#e50914">
-                    <path d="M62 86 L74 86 L70 176 L72 176 Z" />
-                    <path d="M86 86 L98 86 L96 176 L88 176 Z" />
-                    <path d="M110 86 L122 86 L116 176 L108 176 Z" />
-                    <path d="M134 86 L138 86 L128 176 L122 176 Z" />
-                </g>
-                <path d="M58 86 L142 86 L140 98 L60 98 Z" fill="#c20710" />
-            </g>
-        </svg>
-    );
-}
-
-/** Ilustração: bola de futebol no gramado (Canais ao vivo). */
-function LiveBallArt() {
-    return (
-        <svg viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
-            {/* linhas do gramado */}
-            <g stroke="rgba(255,255,255,.18)" strokeWidth="3" fill="none">
-                <circle cx="100" cy="150" r="40" /><line x1="0" y1="150" x2="200" y2="150" />
-            </g>
-            {/* bola */}
-            <circle cx="100" cy="92" r="52" fill="#fff" />
-            <g fill="#0c1a16">
-                <polygon points="100,70 116,82 110,101 90,101 84,82" />
-                <polygon points="100,44 112,52 108,64 92,64 88,52" opacity=".85" />
-                <polygon points="60,80 74,76 80,90 70,102 58,96" opacity=".85" />
-                <polygon points="140,80 126,76 120,90 130,102 142,96" opacity=".85" />
-                <polygon points="78,116 92,108 100,118 92,132 78,128" opacity=".85" />
-                <polygon points="122,116 108,108 100,118 108,132 122,128" opacity=".85" />
-            </g>
-            <circle cx="100" cy="92" r="52" fill="none" stroke="#0c1a16" strokeWidth="3" />
-        </svg>
     );
 }
 

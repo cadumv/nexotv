@@ -16,21 +16,25 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .pick-top { display: flex; justify-content: space-between; align-items: center; padding: 16px 28px; }
 .pick-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px; padding: 0 24px 40px; }
 .pick-sub { color: #f2f2f5; font-size: 30px; font-weight: 800; letter-spacing: .3px; margin: 0; }
-.pick-cards { display: flex; gap: 30px; flex-wrap: wrap; justify-content: center; }
-.pick-card { position: relative; width: 380px; height: 280px; max-width: 86vw; border: 0; border-radius: 18px; overflow: hidden; cursor: pointer; padding: 0;
-    box-shadow: 0 12px 40px rgba(0,0,0,.55); transition: transform .18s, box-shadow .18s, outline-color .18s; outline: 3px solid transparent; }
-.pick-card:hover, .pick-card:focus { transform: translateY(-8px) scale(1.035); box-shadow: 0 26px 70px rgba(0,0,0,.8); outline-color: #fff; }
-.pc-vod { background: radial-gradient(120% 100% at 50% 0%, #7a1418 0%, #3a0c0e 55%, #160607 100%); }
-.pc-channels { background: radial-gradient(120% 100% at 50% 0%, #0e5b4e 0%, #0a3c34 55%, #04201b 100%); }
-.pc-art { position: absolute; left: 0; right: 0; top: 18px; bottom: 64px; display: flex; align-items: center; justify-content: center; filter: drop-shadow(0 8px 18px rgba(0,0,0,.45)); }
-.pc-art svg { width: 64%; height: 100%; }
-.pc-grad { position: absolute; inset: 0; background: linear-gradient(transparent 55%, rgba(0,0,0,.55) 80%, rgba(0,0,0,.9)); pointer-events: none; }
-.pc-foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 20px 20px; }
-.pc-label { font-size: 26px; font-weight: 800; letter-spacing: .4px; color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.95); }
-.pc-live { position: absolute; top: 14px; left: 14px; background: #e50914; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 1px; padding: 4px 10px; border-radius: 6px; }
-.pc-play { position: absolute; top: 42%; left: 50%; transform: translate(-50%,-50%) scale(.6); width: 70px; height: 70px; border-radius: 50%;
-    background: rgba(255,255,255,.16); backdrop-filter: blur(2px); border: 2px solid rgba(255,255,255,.7); color: #fff; font-size: 26px;
-    display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .18s, transform .18s; }
+.pick-cards { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; }
+.pick-card { position: relative; width: 480px; height: 300px; max-width: 90vw; border: 0; border-radius: 16px; overflow: hidden; cursor: pointer; padding: 0;
+    background-size: cover; background-position: center; box-shadow: 0 14px 44px rgba(0,0,0,.6);
+    transition: transform .2s, box-shadow .2s, outline-color .2s; outline: 3px solid transparent; }
+.pick-card:hover, .pick-card:focus { transform: translateY(-8px) scale(1.03); box-shadow: 0 30px 80px rgba(0,0,0,.85); outline-color: #fff; }
+/* gradiente base (enquanto o backdrop não chega) */
+.pc-vod { background-color: #2a0a0c; background-image: radial-gradient(120% 120% at 70% 0%, #7a1418 0%, #2a0a0c 60%, #120506 100%); }
+.pc-channels { background-color: #06241f; background-image: radial-gradient(120% 120% at 70% 0%, #0e5b4e 0%, #06241f 60%, #03130f 100%); }
+/* overlay cinematográfico sobre o backdrop (legibilidade do título) */
+.pc-grad { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.45) 38%, rgba(0,0,0,.05) 62%, transparent 100%),
+                linear-gradient(90deg, rgba(0,0,0,.55) 0%, transparent 45%); }
+.pc-foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 24px 22px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.pc-label { font-size: 30px; font-weight: 900; letter-spacing: .3px; color: #fff; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.95); }
+.pc-sub2 { font-size: 14px; font-weight: 600; color: #d6d6db; text-shadow: 0 1px 8px rgba(0,0,0,.9); }
+.pc-live { position: absolute; top: 16px; left: 16px; background: #e50914; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 1.2px; padding: 5px 11px; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+.pc-play { position: absolute; top: 44%; left: 50%; transform: translate(-50%,-50%) scale(.6); width: 74px; height: 74px; border-radius: 50%;
+    background: rgba(20,20,24,.55); backdrop-filter: blur(3px); border: 2.5px solid rgba(255,255,255,.85); color: #fff; font-size: 28px;
+    display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .2s, transform .2s; }
 .pick-card:hover .pc-play, .pick-card:focus .pc-play { opacity: 1; transform: translate(-50%,-50%) scale(1); }
 
 /* divisor de seção (Filmes / Séries) */
