@@ -64,7 +64,13 @@ function navFocusables(): HTMLElement[] {
     // Se há um overlay aberto (detalhes/busca/player/tela cheia), confina o D-pad a ele
     // — senão o foco "vaza" pros cards atrás do modal.
     const overlay = document.querySelector('.details-box, .search-ov, .player-box, .live-player.fs') as HTMLElement | null;
-    const root: ParentNode = overlay || document;
+    let root: ParentNode = overlay || document;
+    if (!overlay) {
+        // No palco do player (player + provedores), restringe a busca a ele — evita
+        // varrer centenas de botões de canal a cada tecla (lag na TV).
+        const stage = (document.activeElement as HTMLElement | null)?.closest('.chan-stage');
+        if (stage) root = stage;
+    }
     return Array.from(root.querySelectorAll<HTMLElement>(sel))
         .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
 }
@@ -120,6 +126,7 @@ function stageNav(e: React.KeyboardEvent, stage: HTMLElement | null, move: (d: 1
         else if (e.key === 'ArrowRight') { e.preventDefault(); (stage?.querySelector('.live-player') as HTMLElement | null)?.focus(); }
         else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); onBack(); }
     } else {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); stage?.focus(); return; }  // volta pra lista (zap)
         if (e.key.startsWith('Arrow')) {
             e.preventDefault(); spatialMove(e.key);
             const na = document.activeElement as HTMLElement | null;
@@ -512,6 +519,19 @@ function dedupStreams(streams: any[]): { label: string; urls: string[] }[] {
 // Rola o chip focado pra dentro da vista (D-pad na TV / Tab na web).
 const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ inline: 'center', block: 'nearest' });
 
+// Linha de canal MEMOIZADA: ao zapear (idx muda), só as 2 linhas cujo `selected`
+// mudou re-renderizam — sem isso a TV re-renderiza centenas de itens por tecla (lag).
+const ChannelRow = React.memo(function ChannelRow({ meta, index, selected, onSelect }: { meta: any; index: number; selected: boolean; onSelect: (i: number) => void }) {
+    return (
+        <button data-i={index} className={`chan-row${selected ? ' on' : ''}`} onClick={() => onSelect(index)}>
+            <img className="chan-ico" alt="" loading="lazy"
+                src={(Array.isArray(meta.posterChain) && meta.posterChain[0]) || meta.poster || cardFor(meta.name)}
+                onError={(e) => { const c = cardFor(meta.name); const img = e.currentTarget as HTMLImageElement; if (img.src !== c) img.src = c; }} />
+            <span className="chan-name">{meta.name}</span>
+        </button>
+    );
+});
+
 // Agrupa os jogos: ao vivo → próximos (hoje+amanhã) → por competição. Tudo
 // ordenado por data (mais cedo primeiro); competição ordenada pelo jogo + cedo.
 function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [string, any[]][] } {
@@ -845,6 +865,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
         const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
         select(chanIdxs[np]);
     };
+    const selectNow = useCallback((i: number) => select(i, true), [select]);  // estável p/ memo das linhas
     // Navegação LISA da lista de categorias: ↑↓ move o foco entre as categorias
     // (roving focus + scroll), Enter seleciona (onClick do botão), Voltar volta.
     const catsKey = (e: React.KeyboardEvent) => {
@@ -916,12 +937,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                                 <div className="chan-section" key={'s' + sec.hi}>
                                     <div className="chan-divider" data-h={sec.hi}><span>{label(sec.header.name)}</span></div>
                                     {sec.items.map(({ f, i }) => (
-                                        <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
-                                            <img className="chan-ico" alt="" loading="lazy"
-                                                src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
-                                                onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
-                                            <span className="chan-name">{f.meta.name}</span>
-                                        </button>
+                                        <ChannelRow key={i} meta={f.meta} index={i} selected={i === idx} onSelect={selectNow} />
                                     ))}
                                 </div>
                             ));
