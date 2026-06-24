@@ -19,6 +19,17 @@ async function makeHttp(): Promise<HttpClient> {
 // Chave TMDB padrão (de .env.local / build-time, fora do GitHub) — pra posters/
 // hero funcionarem sem o usuário digitar.
 const DEFAULT_TMDB = (import.meta as any).env?.VITE_TMDB_KEY || null;
+// Proxy de logos (Worker /img): build-time, ou derivado do Worker da agenda (mesmo
+// Worker hospeda /agenda e /img). Quando presente, logos ficam CORS-limpos e a
+// detecção de fundo (cover vs contain) liga sozinha.
+const DEFAULT_LOGO_PROXY = (import.meta as any).env?.VITE_LOGO_PROXY || null;
+function deriveLogoProxy(o: EngineOptions): string | null {
+    if (o.logoProxyBase) return o.logoProxyBase;
+    if (DEFAULT_LOGO_PROXY) return DEFAULT_LOGO_PROXY;
+    const a = o.sofascoreAgendaUrl;
+    if (a) { try { return new URL(a).origin; } catch { /* url inválida */ } }
+    return null;
+}
 
 export async function createEngine(config: AddonConfig, options: EngineOptions): Promise<NexoEngine> {
     const http = await makeHttp();
@@ -27,6 +38,7 @@ export async function createEngine(config: AddonConfig, options: EngineOptions):
         ...options,
         tmdbApiKey: options.tmdbApiKey || DEFAULT_TMDB,
         logoBank: options.logoBank || (logoBank as Record<string, string>),
+        logoProxyBase: deriveLogoProxy(options),
     };
     const engine = new NexoEngine(config, { http, options: opts });
     await engine.load();

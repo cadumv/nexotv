@@ -28,6 +28,10 @@ export interface EngineOptions {
     epgMaxBytes?: number;
     /** Banco de logos opcional (compact(nome) → url) — fallback p/ canais sem logo. */
     logoBank?: Record<string, string> | null;
+    /** Proxy de logos CORS-limpo (ex: Worker `/img`). Quando definido, os logos
+     *  passam por `${logoProxyBase}/img?u=<url>` (cacheado na borda, CORS:*),
+     *  permitindo a detecção de fundo no cliente e evitando throttle do wsrv. */
+    logoProxyBase?: string | null;
     log?: (level: 'debug' | 'warn' | 'error', msg: string, extra?: any) => void;
 }
 
@@ -325,8 +329,11 @@ export class NexoEngine {
     private _wsrv(url: string): string {
         let u = url;
         if (u.includes('imgur.com')) u = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(u)}`;
-        // SEM bg/achatar: preserva a transparência (o cliente detecta fundo opaco vs
-        // transparente p/ escolher cover vs contain). trim corta bordas uniformes.
+        // Proxy próprio (CORS-limpo, cacheado) quando configurado → habilita detecção
+        // de fundo no cliente e evita throttle do wsrv. Senão, wsrv público direto.
+        const base = this.options.logoProxyBase;
+        if (base) return `${base.replace(/\/$/, '')}/img?u=${encodeURIComponent(u)}`;
+        // SEM bg/achatar: preserva a transparência (cliente decide cover vs contain).
         return `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=320&trim=10`;
     }
     private _logoCardUrl(item: any): string {
