@@ -229,9 +229,25 @@ export class NexoEngine {
             const q = extra.search.toLowerCase();
             items = items.filter((i: any) => (i.name || '').toLowerCase().includes(q));
         }
+        // Filmes/séries: colapsa repetidos (mesmo título+ano: dublado/legendado/4K…)
+        // num tile só — limpa o "Mulan, Mulan / Ruas da Glória x2".
+        if (args.type === 'movie' || args.type === 'series') items = this._dedupTitles(items);
         const PAGE = this.options.catalogPageSize ?? 100;
         const skip = parseInt(extra.skip || '0', 10) || 0;
         return { metas: items.slice(skip, skip + PAGE).map(toMeta) };
+    }
+
+    // Colapsa filmes/séries repetidos por título+ano (prefere o que tem poster).
+    _dedupTitles(items: any[]) {
+        const seen = new Map<string, any>();
+        for (const it of items) {
+            const k = normalizeTitle(it.name) + '|' + (it.year ? String(it.year).slice(0, 4) : '');
+            const ex = seen.get(k);
+            if (!ex) { seen.set(k, it); continue; }
+            // mantém o que tem poster (capa) — visual melhor.
+            if (!ex.poster && it.poster) seen.set(k, it);
+        }
+        return [...seen.values()];
     }
 
     // ===================== CHANNELS =====================
