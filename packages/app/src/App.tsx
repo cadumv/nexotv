@@ -847,14 +847,36 @@ function ratingNum(m: any): number { const r = parseFloat(m?.imdbRating); return
 const PROG_KEY = 'rajada.progress.v1';
 function loadProg(): Record<string, { pos: number; dur: number; t: number }> { try { return JSON.parse(localStorage.getItem(PROG_KEY) || '{}'); } catch { return {}; } }
 function getProg(key: string) { if (!key) return null; return loadProg()[key] || null; }
+// Episódios/filmes concluídos (>95%) — usado p/ achar o "próximo episódio".
+const WATCHED_KEY = 'rajada.watched.v1';
+function loadWatched(): Record<string, number> { try { return JSON.parse(localStorage.getItem(WATCHED_KEY) || '{}'); } catch { return {}; } }
+function markWatched(key: string) { if (!key) return; try { const w = loadWatched(); w[key] = Date.now(); localStorage.setItem(WATCHED_KEY, JSON.stringify(w)); } catch { } }
 function saveProg(key: string, pos: number, dur: number) {
     if (!key || !dur || !isFinite(pos)) return;
     try {
         const p = loadProg();
-        if (pos / dur > 0.95 || pos < 8) delete p[key];          // quase no fim ou começo → não guarda
+        if (pos / dur > 0.95) { delete p[key]; markWatched(key); }   // concluído → tira do "continuar" e marca assistido
+        else if (pos < 8) delete p[key];                             // mal começou → não guarda
         else p[key] = { pos, dur, t: Date.now() };
         localStorage.setItem(PROG_KEY, JSON.stringify(p));
     } catch { }
+}
+// Resolve o que tocar ao clicar "Continuar/Assistir" numa série.
+function resolveResume(videos: any[]): { ep: any; mode: 'continue' | 'next' | 'first' | 'rewatch'; pos: number } | null {
+    if (!videos.length) return null;
+    const ordered = [...videos].sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
+    const prog = loadProg(); const watched = loadWatched();
+    let ip: { v: any; t: number; pos: number } | null = null;
+    for (const v of ordered) { const p = prog[v.id]; if (p && p.t > (ip?.t || 0)) ip = { v, t: p.t, pos: p.pos }; }
+    let fin: { v: any; t: number } | null = null;
+    for (const v of ordered) { const t = watched[v.id]; if (t && t > (fin?.t || 0)) fin = { v, t }; }
+    if (ip && (!fin || ip.t >= fin.t)) return { ep: ip.v, mode: 'continue', pos: ip.pos };
+    if (fin) {
+        const idx = ordered.findIndex(v => v.id === fin!.v.id);
+        const next = ordered[idx + 1];
+        return next ? { ep: next, mode: 'next', pos: 0 } : { ep: fin.v, mode: 'rewatch', pos: 0 };
+    }
+    return { ep: ordered[0], mode: 'first', pos: 0 };
 }
 function fmtTime(s: number): string {
     s = Math.max(0, Math.floor(s || 0));
@@ -942,7 +964,7 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
     useEffect(() => {
         let dead = false; setLoading(true);
         engine.getDetailedMeta(meta.id)
-            .then((r: any) => { if (!dead && r) { setD(r); const vs = Array.isArray(r.videos) ? r.videos : []; if (vs.length) setSeason(vs[0].season || 1); } })
+            .then((r: any) => { if (!dead && r) { setD(r); const vs = Array.isArray(r.videos) ? r.videos : []; if (vs.length) { const rr = resolveResume(vs); setSeason(rr?.ep.season || vs[0].season || 1); } } })
             .catch(() => { }).finally(() => { if (!dead) setLoading(false); });
         return () => { dead = true; };
     }, [meta.id]);
@@ -960,10 +982,18 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
     const startMovie = async (from: number) => {
         try { const s = await engine.getStreams(meta.id); if (s[0]?.url) onPlay(s[0].url, d.name, meta.id, from); } catch { }
     };
-    const playEp = async (ep: any) => {
-        try { const s = await engine.getStreams(ep.id); if (s[0]?.url) onPlay(s[0].url, `${d.name} · S${ep.season}E${ep.episode}`, ep.id, getProg(ep.id)?.pos || 0); } catch { }
+    const playEp = async (ep: any, from?: number) => {
+        try { const s = await engine.getStreams(ep.id); if (s[0]?.url) onPlay(s[0].url, `${d.name} · S${ep.season}E${ep.episode}`, ep.id, from != null ? from : (getProg(ep.id)?.pos || 0)); } catch { }
     };
     const mProg = !isSeries ? getProg(meta.id) : null;
+    // Série: o que tocar no botão principal (retoma / próximo / 1º episódio).
+    const resume = isSeries ? resolveResume(videos) : null;
+    const resumeLabel = resume && ({
+        continue: `Continuar T${resume.ep.season}E${resume.ep.episode} (${fmtTime(resume.pos)})`,
+        next: `Assistir T${resume.ep.season}E${resume.ep.episode}`,
+        rewatch: `Rever T${resume.ep.season}E${resume.ep.episode}`,
+        first: `Assistir T${resume.ep.season}E${resume.ep.episode}`,
+    } as any)[resume.mode];
 
     return (
         <div className="details" onClick={onClose}>
@@ -986,6 +1016,12 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
                                 <div className="details-actions">
                                     <button className="vb-play" onClick={() => startMovie(mProg?.pos || 0)}>▶ {mProg ? `Continuar (${fmtTime(mProg.pos)})` : 'Assistir'}</button>
                                     {mProg && <button className="details-restart" onClick={() => startMovie(0)}>Reiniciar</button>}
+                                </div>
+                            )}
+                            {isSeries && resume && (
+                                <div className="details-actions">
+                                    <button className="vb-play" onClick={() => playEp(resume.ep, resume.pos)}>▶ {resumeLabel}</button>
+                                    {resume.mode === 'continue' && <button className="details-restart" onClick={() => playEp(resume.ep, 0)}>Reiniciar ep.</button>}
                                 </div>
                             )}
                         </div>
