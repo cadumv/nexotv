@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
-import { createEngine, tmdbPoster } from './engineHost';
+import { createEngine, tmdbBackdrop } from './engineHost';
 
 const LS_KEY = 'rajada.config.v1';
 
@@ -199,15 +199,15 @@ function App() {
                 const c = cats.find((x: any) => x.id === 'nexotv_vod');
                 if (c) {
                     const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
-                    // card de pôster (retrato): pega um pôster real (não-placehold)
-                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
-                    if (withP) vod = withP.poster;
-                    else if (metas[0]) vod = (await engine.getTmdbPosterFor(metas[0].id).catch(() => null)) || undefined;
+                    for (const m of metas.slice(0, 4)) {
+                        const mm = await engine.getMeta('movie', m.id).catch(() => null);
+                        const bg = mm?.meta?.background;
+                        if (bg && !/placehold/.test(bg)) { vod = bg; break; }
+                    }
                 }
             } catch { /* fallback gradiente */ }
-            // pôster retrato (encaixa no card 2:3)
-            const tv = (await tmdbPoster('telejornal').catch(() => null)) || (await tmdbPoster('jornal nacional').catch(() => null)) || undefined;
-            const live = (await tmdbPoster('futebol').catch(() => null)) || (await tmdbPoster('pele').catch(() => null)) || undefined;
+            const tv = (await tmdbBackdrop('telejornal').catch(() => null)) || (await tmdbBackdrop('television studio').catch(() => null)) || undefined;
+            const live = (await tmdbBackdrop('futebol').catch(() => null)) || (await tmdbBackdrop('soccer stadium').catch(() => null)) || undefined;
             if (!dead) setPickArt({ vod, tv, live });
         })();
         return () => { dead = true; };
