@@ -2,6 +2,23 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
+// Proxy de EPG no dev: o navegador bloqueia o xmltv.php do provedor por CORS.
+// /__epg?u=<url> busca servidor→servidor e devolve o XML (sem CORS). Só no dev.
+const epgProxy = {
+  name: 'epg-proxy',
+  configureServer(server: any) {
+    server.middlewares.use('/__epg', async (req: any, res: any) => {
+      try {
+        const u = new URL(req.url, 'http://localhost').searchParams.get('u');
+        if (!u) { res.statusCode = 400; res.end('missing u'); return; }
+        const r = await fetch(u);
+        res.setHeader('content-type', r.headers.get('content-type') || 'application/xml');
+        res.end(Buffer.from(await r.arrayBuffer()));
+      } catch { res.statusCode = 502; res.end('epg proxy error'); }
+    });
+  },
+};
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname), '');
   // Proxy de /agenda no dev: servidor→servidor (sem CORS no navegador). A origem
@@ -9,7 +26,7 @@ export default defineConfig(({ mode }) => {
   let agendaOrigin = '';
   try { if (env.VITE_AGENDA_URL) agendaOrigin = new URL(env.VITE_AGENDA_URL).origin; } catch { /* url inválida */ }
   return {
-    plugins: [react()],
+    plugins: [react(), epgProxy],
     base: './', // Capacitor carrega de arquivos locais
     resolve: {
       alias: {
@@ -17,7 +34,13 @@ export default defineConfig(({ mode }) => {
         '@nexotv/core': path.resolve(__dirname, '../core/src/index.ts'),
       },
     },
-    server: agendaOrigin ? { proxy: { '/agenda': { target: agendaOrigin, changeOrigin: true, secure: true } } } : undefined,
+    // host:true + allowedHosts:true permitem expor via túnel (cloudflared/etc.)
+    // pra visualização remota; o proxy /agenda mantém os Jogos funcionando.
+    server: {
+      host: true,
+      allowedHosts: true,
+      ...(agendaOrigin ? { proxy: { '/agenda': { target: agendaOrigin, changeOrigin: true, secure: true } } } : {}),
+    },
     build: { outDir: 'dist', target: 'es2020' },
   };
 });

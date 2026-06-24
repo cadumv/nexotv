@@ -473,8 +473,12 @@ export class NexoEngine {
         if (!variants.length) return null;
         const rep = variants[0];
         const logoRep = this._repWithLogo(variants);
-        const epgId = rep.attributes?.['tvg-id'] || rep.attributes?.['tvg-name'] || rep.epg_channel_id;
-        const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
+        const epgIdOf = (v: any) => v?.attributes?.['tvg-id'] || v?.attributes?.['tvg-name'] || v?.epg_channel_id;
+        // Procura o programa atual entre TODAS as variantes do grupo (o representante
+        // nem sempre tem EPG); usa o epgId da 1ª variante que tiver programa agora.
+        let epgId = epgIdOf(rep);
+        let cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
+        if (!cur) for (const v of variants) { const id = epgIdOf(v); const c = id && getCurrentProgram(this.epgData, id, this.epgOffset); if (c) { cur = c; epgId = id; break; } }
         const upcoming = getUpcomingPrograms(this.epgData, epgId, 4, this.epgOffset);
         const hhmm = (dt: any) => dt ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : '';
         let description = stripAccents(base);

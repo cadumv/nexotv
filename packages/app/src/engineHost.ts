@@ -67,7 +67,22 @@ export async function tmdbPoster(query: string): Promise<string | null> {
     } catch { return null; }
 }
 
+// Liga o EPG e, no dev (navegador), roteia o xmltv pelo proxy do Vite (/__epg)
+// pra furar o CORS. No nativo/APK não há CORS → busca direto.
+function withEpg(config: AddonConfig): AddonConfig {
+    const c: any = { ...config, enableEpg: true };
+    const isDev = (import.meta as any).env?.DEV;
+    if (isDev && c.provider === 'xtream' && c.xtreamUrl && c.xtreamUsername && c.xtreamPassword && !c.epgUrl) {
+        const xmltv = `${c.xtreamUrl}/xmltv.php?username=${encodeURIComponent(c.xtreamUsername)}&password=${encodeURIComponent(c.xtreamPassword)}`;
+        // URL absoluta (origem do dev) — relativa vira "http:///__epg" na normalização do core.
+        const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : '';
+        c.epgUrl = `${origin}/__epg?u=${encodeURIComponent(xmltv)}`;
+    }
+    return c;
+}
+
 export async function createEngine(config: AddonConfig, options: EngineOptions): Promise<NexoEngine> {
+    config = withEpg(config);
     const http = await makeHttp();
     // Banco de logos (iptv-org BR, bundlado) como fallback automático + TMDB padrão.
     const opts: EngineOptions = {
