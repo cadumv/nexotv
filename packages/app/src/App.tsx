@@ -199,11 +199,10 @@ function App() {
                 const c = cats.find((x: any) => x.id === 'nexotv_vod');
                 if (c) {
                     const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
-                    for (const m of metas.slice(0, 4)) {
-                        const mm = await engine.getMeta('movie', m.id).catch(() => null);
-                        const bg = mm?.meta?.background;
-                        if (bg && !/placehold/.test(bg)) { vod = bg; break; }
-                    }
+                    // card de pôster (retrato): pega um pôster real (não-placehold)
+                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
+                    if (withP) vod = withP.poster;
+                    else if (metas[0]) vod = (await engine.getTmdbPosterFor(metas[0].id).catch(() => null)) || undefined;
                 }
             } catch { /* fallback gradiente */ }
             const tv = (await tmdbBackdrop('telejornal').catch(() => null)) || (await tmdbBackdrop('television studio').catch(() => null)) || undefined;
@@ -297,8 +296,6 @@ function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) =>
                 <div className="pick-cards">
                     {Card('vod', 'pc-vod', art.vod, 'Filmes e Séries', 'Catálogo completo', false)}
                     {Card('channels', 'pc-channels', art.tv, 'Canais', 'TV agora', false)}
-                </div>
-                <div className="pick-cards pick-row2">
                     {Card('games', 'pc-games', art.live, 'Jogos ao vivo', 'Acontecendo e próximos', true)}
                 </div>
                 {status && <div className="status">{status}</div>}
