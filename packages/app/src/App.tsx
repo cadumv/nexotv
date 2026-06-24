@@ -621,13 +621,13 @@ function ChannelsView({ engine, cats, flat, loading }: {
     const [title, setTitle] = useState('');
     const [opts, setOpts] = useState<any[]>([]);
     const [watch] = useState<Record<string, number>>(loadWatch); // snapshot do histórico (não reembaralha na sessão)
-    const [favSnap] = useState<Record<string, any>>(loadFav);    // snapshot dos favoritos (seção fixa na sessão)
-    const [, setFavTick] = useState(0);                          // re-render do botão estrela ao alternar
+    const [favVer, setFavVer] = useState(0);                     // versão dos favoritos (reativo ao favoritar)
     const [epg, setEpg] = useState<{ now: string; next: string }>({ now: '', next: '' });
     const scrollRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const timer = useRef<any>(null);
     const watchTimer = useRef<any>(null); // só conta "assistido" após 10 min no canal
+    const curIdRef = useRef<string>('');  // id do canal tocando (re-sincroniza índice após reordenar)
     const started = useRef(false);
 
     const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
@@ -643,8 +643,9 @@ function ChannelsView({ engine, cats, flat, loading }: {
         flat.filter(f => f.kind === 'chan')
             .slice().sort((a, b) => score(b) - score(a))
             .forEach(f => { if (score(f) > 0 && !seen.has(f.meta.name) && top.length < 12) { seen.add(f.meta.name); top.push(f); } });
-        // Favoritos (snapshot): canais marcados que existem na lista atual.
-        const favs = flat.filter(f => f.kind === 'chan' && favSnap[f.meta.id]);
+        // Favoritos (reativo): canais marcados que existem na lista atual.
+        const favMap = loadFav();
+        const favs = flat.filter(f => f.kind === 'chan' && favMap[f.meta.id]);
         let vflat = flat; let vcats = cats;
         const prefixFlat: FlatItem[] = []; const prefixCats: any[] = [];
         if (favs.length) {
@@ -659,12 +660,20 @@ function ChannelsView({ engine, cats, flat, loading }: {
         const vCatFirst: Record<string, number> = {};
         vflat.forEach((f, i) => { if (f.kind === 'header' && !(f.catId in vCatFirst)) vCatFirst[f.catId] = i; });
         return { vflat, vcats, vCatFirst };
-    }, [flat, cats, watch, favSnap]);
+    }, [flat, cats, watch, favVer]);
 
     const chanIdxs = useMemo(() => { const a: number[] = []; vflat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [vflat]);
 
+    // Ao (des)favoritar, a lista reordena → reaponta o índice pro canal que está tocando.
+    useEffect(() => {
+        if (!curIdRef.current) return;
+        const ni = vflat.findIndex(f => f.kind === 'chan' && f.meta.id === curIdRef.current);
+        if (ni >= 0) { setIdx(ni); setTimeout(() => scrollRef.current?.querySelector(`[data-i="${ni}"]`)?.scrollIntoView({ block: 'nearest' }), 0); }
+    }, [favVer]);
+
     const loadStream = useCallback(async (i: number) => {
         const it = vflat[i]; if (!it || it.kind !== 'chan') return;
+        curIdRef.current = it.meta.id;
         setTitle(it.meta.name);
         // "Mais assistidos": só conta depois de 10 min CONTÍNUOS no canal (zapear não
         // conta). O timer reinicia a cada troca; sai antes dos 10 min → não registra.
@@ -699,7 +708,13 @@ function ChannelsView({ engine, cats, flat, loading }: {
         for (let i = h + 1; i < vflat.length; i++) { if (vflat[i].kind === 'chan') { fc = i; break; } if (vflat[i].kind === 'header') break; }
         setMode('channels');
         if (fc >= 0) select(fc, true);
-        setTimeout(() => stageRef.current?.focus(), 30);
+        // Rola o cabeçalho da categoria escolhida pro TOPO da lista (não pro fim).
+        // Espera a lista renderizar e alinha pelo bounding rect (sticky-safe).
+        setTimeout(() => {
+            const sc = scrollRef.current; const el = sc?.querySelector(`[data-h="${h}"]`) as HTMLElement | null;
+            if (sc && el) sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+            stageRef.current?.focus();
+        }, 140);
     };
 
     const move = (dir: 1 | -1) => {
@@ -739,7 +754,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                         ))
                     ) : (
                         vflat.map((f, i) => f.kind === 'header' ? (
-                            <div className="chan-divider" key={'h' + i}><span>{label(f.name)}</span></div>
+                            <div className="chan-divider" data-h={i} key={'h' + i}><span>{label(f.name)}</span></div>
                         ) : (
                             <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
                                 <img className="chan-ico" alt="" loading="lazy"
@@ -757,7 +772,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                     <div className="now-head">
                         {curMeta && (
                             <button className={`now-fav${isFav(curMeta.id) ? ' on' : ''}`} title="Favoritar canal"
-                                onClick={() => { toggleFav(curMeta); setFavTick(t => t + 1); }}>{isFav(curMeta.id) ? '★' : '☆'}</button>
+                                onClick={() => { toggleFav(curMeta); setFavVer(v => v + 1); }}>{isFav(curMeta.id) ? '★' : '☆'}</button>
                         )}
                         <span className="now-title">{title || 'Selecione um canal'}</span>
                         {epg.now
