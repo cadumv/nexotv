@@ -2,10 +2,18 @@
 // Serve o dist/ num http://127.0.0.1:<porta> local (mesma situação do localhost que
 // já toca vídeo) e abre numa janela Chromium com webSecurity desligado, pra liberar
 // o fetch HTTP do provedor (sem CORS, sem mixed-content).
-const { app, BrowserWindow, shell, session } = require('electron');
+const { app, BrowserWindow, shell, session, ipcMain } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+
+// Store em ARQUIVO (login/favoritos/etc.) — gravado na hora, independente de porta.
+const STORE_FILE = () => path.join(app.getPath('userData'), 'rajada-store.json');
+function readStore() { try { return JSON.parse(fs.readFileSync(STORE_FILE(), 'utf8')); } catch { return {}; } }
+function writeStore(obj) { try { fs.writeFileSync(STORE_FILE(), JSON.stringify(obj)); } catch { /* noop */ } }
+ipcMain.on('rajada-store-get', (e) => { e.returnValue = readStore(); });
+ipcMain.on('rajada-store-set', (_e, { k, v }) => { const s = readStore(); s[k] = v; writeStore(s); });
+ipcMain.on('rajada-store-del', (_e, k) => { const s = readStore(); delete s[k]; writeStore(s); });
 
 const DIST = path.join(__dirname, '..', 'dist');
 const MIME = {
@@ -60,6 +68,8 @@ async function createWindow() {
       webSecurity: false,          // libera fetch HTTP do provedor (sem CORS/mixed-content)
       allowRunningInsecureContent: true,
       backgroundThrottling: false,
+      contextIsolation: false,     // preload compartilha contexto p/ espelhar o localStorage
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
   // Links externos abrem no navegador padrão, não dentro do app.
