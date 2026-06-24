@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import Hls from 'hls.js';
 import { attachAdaptive } from './player';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine, tmdbPoster } from './engineHost';
@@ -904,20 +905,70 @@ function LivePlayer({ sources, title, options, onPick }: {
 }) {
     const ref = useRef<HTMLVideoElement>(null);
     const boxRef = useRef<HTMLDivElement>(null);
-    const [i, setI] = useState(0);          // fonte atual dentro da cadeia
-    const [dead, setDead] = useState(false); // todas as fontes falharam
-    const [fs, setFs] = useState(false);     // tela cheia (CSS — funciona em qualquer TV)
-    // Nova seleção (canal/jogo/marca) → recomeça da melhor fonte.
-    useEffect(() => { setI(0); setDead(false); }, [sources]);
-    const url = sources[i] || '';
+    const hlsRef = useRef<Hls | null>(null);
+    const idxRef = useRef(0);                 // fonte atual na cadeia
+    const srcRef = useRef<string[]>(sources);
+    const recoverRef = useRef(0);
+    const [alt, setAlt] = useState(0);        // fonte em uso (p/ aviso "tentando alternativa")
+    const [dead, setDead] = useState(false);  // todas as fontes falharam
+    const [fs, setFs] = useState(false);      // tela cheia (CSS — funciona em qualquer TV)
+    srcRef.current = sources;
+
+    // Toca a fonte i. hls.js é uma instância PERSISTENTE: trocar de canal/fonte só faz
+    // loadSource (rápido), sem destruir/recriar — e recupera travadas sozinho.
+    const playAt = useCallback((i: number) => {
+        const v = ref.current; const url = srcRef.current[i];
+        if (!v || !url) return;
+        idxRef.current = i; setAlt(i);
+        const nextSrc = () => { const ni = idxRef.current + 1; if (ni < srcRef.current.length) { recoverRef.current = 0; playAt(ni); } else setDead(true); };
+        if (Hls.isSupported()) {
+            let hls = hlsRef.current;
+            if (!hls) {
+                hls = new Hls({
+                    enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
+                    backBufferLength: 30, maxBufferLength: 30, maxMaxBufferLength: 60,
+                    manifestLoadingTimeOut: 8000, fragLoadingTimeOut: 20000,
+                    manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6,
+                });
+                hls.attachMedia(v);
+                hls.on(Hls.Events.ERROR, (_e, d) => {
+                    if (!d.fatal) return;
+                    const h = hlsRef.current; if (!h) return;
+                    // Recupera sem trocar de fonte (rede/mídia) algumas vezes.
+                    if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recoverRef.current < 4) { recoverRef.current++; try { h.startLoad(); } catch { } return; }
+                    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recoverRef.current < 4) { recoverRef.current++; try { h.recoverMediaError(); } catch { } return; }
+                    nextSrc(); // irrecuperável → próxima fonte
+                });
+                hlsRef.current = hls;
+            }
+            recoverRef.current = 0;
+            hls.loadSource(url);
+            v.play().catch(() => { });
+        } else {
+            // Sem MSE (TVs antigas) → player nativo.
+            v.src = url;
+            v.onerror = nextSrc;
+            v.play().catch(() => { });
+        }
+    }, []);
+
+    // Troca de canal/marca → recomeça da 1ª fonte (loadSource na MESMA instância).
+    useEffect(() => { setDead(false); recoverRef.current = 0; playAt(0); }, [sources, playAt]);
+
+    // Vigia de travadas: se está tocando mas o tempo não anda por ~3s, cutuca o hls.
     useEffect(() => {
-        const v = ref.current; if (!v || !url) return;
-        let cancelled = false;
-        // Esgotou todas as engines desta fonte → tenta a próxima fonte; se acabou, morre.
-        const onFatal = () => { if (cancelled) return; if (i < sources.length - 1) setI(i + 1); else setDead(true); };
-        const handle = attachAdaptive(v, url, onFatal);
-        return () => { cancelled = true; handle.destroy(); };
-    }, [url, i, sources]);
+        const v = ref.current; if (!v) return;
+        let last = -1, stuck = 0;
+        const iv = setInterval(() => {
+            if (v.paused || v.readyState < 2) return;
+            if (v.currentTime === last) { if (++stuck >= 3) { stuck = 0; try { hlsRef.current?.startLoad(); } catch { } v.play().catch(() => { }); } }
+            else { stuck = 0; last = v.currentTime; }
+        }, 1000);
+        return () => clearInterval(iv);
+    }, []);
+
+    // Destrói a instância ao desmontar.
+    useEffect(() => () => { try { hlsRef.current?.destroy(); } catch { } hlsRef.current = null; }, []);
     // Em tela cheia, Esc/Voltar sai da tela cheia (e NÃO volta pras categorias).
     useEffect(() => {
         if (!fs) return;
@@ -935,7 +986,7 @@ function LivePlayer({ sources, title, options, onPick }: {
         }, 60);
         return () => clearTimeout(t);
     }, [fs]);
-    const trying = i > 0 && !dead;
+    const trying = alt > 0 && !dead;
     const active = sources[0];
     const canFs = !!sources.length;
     // OK/Enter no player (foco no container) → entra em tela cheia.
@@ -957,7 +1008,7 @@ function LivePlayer({ sources, title, options, onPick }: {
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
             {canFs && !fs && <span className="live-hint">⛶ OK = tela cheia</span>}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
-            {trying && <div className="live-fallback">Fonte instável — tentando alternativa {i + 1}/{sources.length}…</div>}
+            {trying && <div className="live-fallback">Fonte instável — tentando alternativa {alt + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
             {fs && (
                 <div className="live-ov">
