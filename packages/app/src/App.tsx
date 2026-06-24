@@ -407,7 +407,13 @@ const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ in
 // Agrupa os jogos: ao vivo → próximos (hoje+amanhã) → por competição. Tudo
 // ordenado por data (mais cedo primeiro); competição ordenada pelo jogo + cedo.
 function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [string, any[]][] } {
+    const now = Date.now();
     const byTime = (a: any, b: any) => (a.startMs || 0) - (b.startMs || 0);
+    // Próximo primeiro: jogos por vir (por data), e os já passados no fim.
+    const byNextFirst = (a: any, b: any) => {
+        const pa = (a.startMs || 0) < now ? 1 : 0, pb = (b.startMs || 0) < now ? 1 : 0;
+        return pa - pb || byTime(a, b);
+    };
     const live = metas.filter(m => m.live);
     const rest = metas.filter(m => !m.live);
     // Janela "próximos": de hoje 00h até o fim de amanhã.
@@ -416,10 +422,13 @@ function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [str
     const upcoming = rest.filter(m => (m.startMs || 0) >= from && (m.startMs || 0) < to).sort(byTime);
     const groups = new Map<string, any[]>();
     for (const m of rest) { const k = (m.tournament || '').trim() || 'Outros jogos'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(m); }
-    for (const list of groups.values()) list.sort(byTime);
+    for (const list of groups.values()) list.sort(byNextFirst);
+    // Chave de ordenação da competição = data do PRÓXIMO jogo dela (ignora os que
+    // já passaram); se todos passaram, usa o último.
+    const nextOf = (list: any[]) => { const f = list.find(m => (m.startMs || 0) >= now); return f ? f.startMs : (list[list.length - 1]?.startMs || 0); };
     const ordered = [...groups.entries()].sort((a, b) => {
         if (a[0] === 'Outros jogos') return 1; if (b[0] === 'Outros jogos') return -1;
-        return (a[1][0]?.startMs || 0) - (b[1][0]?.startMs || 0);
+        return nextOf(a[1]) - nextOf(b[1]);
     });
     return { live, upcoming, ordered };
 }
