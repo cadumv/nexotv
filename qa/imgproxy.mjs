@@ -9,6 +9,16 @@ const PORT = 8787;
 http.createServer(async (req, res) => {
     try {
         const u = new URL(req.url, `http://localhost:${PORT}`);
+        // Passthrough da agenda do Worker com CORS (pra validar Jogos no headless
+        // enquanto o Worker /agenda real ainda não tem CORS deployado).
+        if (u.pathname === '/agenda') {
+            const real = process.env.AGENDA_TARGET; // URL+secret via env (fora do git)
+            if (!real) { res.writeHead(500, { 'Access-Control-Allow-Origin': '*' }); return res.end('AGENDA_TARGET ausente'); }
+            const r = await fetch(real);
+            const body = await r.text();
+            res.writeHead(r.status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+            return res.end(body);
+        }
         if (u.pathname !== '/img') { res.writeHead(404); return res.end('no'); }
         const orig = u.searchParams.get('u');
         if (!orig) { res.writeHead(400); return res.end('missing u'); }

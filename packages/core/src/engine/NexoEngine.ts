@@ -646,29 +646,42 @@ export class NexoEngine {
         const k = stripAccents(name || '').toLowerCase().trim();
         return NexoEngine._TEAM_PT[k] || name;
     }
-    // Nome de competição amigável (PT-BR) a partir do nome cru do Sofascore.
+    // Nome de competição amigável (PT-BR) a partir do nome cru do Sofascore,
+    // preservando a fase/grupo (ex: "FIFA World Cup, Group K" → "Copa do Mundo · Grupo K").
     _prettyTournament(raw: string): string {
-        const t = stripAccents(raw || '').toLowerCase();
-        if (!t) return '';
-        if (t.includes('world cup') || t.includes('copa do mundo')) return t.includes('club') ? 'Mundial de Clubes' : 'Copa do Mundo';
-        if (t.includes('copa america') || t.includes('conmebol america')) return 'Copa America';
-        if (t.includes('libertadores')) return 'Libertadores';
-        if (t.includes('sudamericana') || t.includes('sul-americana')) return 'Sul-Americana';
-        if (t.includes('champions')) return 'Champions League';
-        if (t.includes('europa league')) return 'Europa League';
-        if (t.includes('euro') && !t.includes('europa')) return 'Eurocopa';
-        if (t.includes('premier league')) return 'Premier League';
-        if (t.includes('laliga') || t.includes('la liga')) return 'La Liga';
-        if (t.includes('serie a') && (t.includes('bra') || t.includes('betano'))) return 'Brasileirao';
-        if (t.includes('serie b') && t.includes('bra')) return 'Brasileirao Serie B';
-        if (t.includes('copa do brasil')) return 'Copa do Brasil';
-        if (t.includes('serie a') && t.includes('ita')) return 'Italiano - Serie A';
-        if (t.includes('bundesliga')) return 'Bundesliga';
-        if (t.includes('ligue 1')) return 'Ligue 1';
-        if (t.includes('carioca') || t.includes('paulista') || t.includes('mineiro') || t.includes('gaucho') || t.includes('estadual')) return 'Estaduais';
-        if (t.includes('eliminatorias') || t.includes('qualification') || t.includes('qualifier')) return 'Eliminatorias';
-        if (t.includes('amistoso') || t.includes('friendly')) return 'Amistosos';
-        return stripAccents(raw).replace(/\b(conmebol|uefa|fifa|concacaf)\b/gi, '').replace(/\s+/g, ' ').trim() || stripAccents(raw);
+        const full = stripAccents(raw || '').trim();
+        if (!full) return '';
+        const t = full.toLowerCase();
+        let base = '';
+        if (t.includes('world cup') || t.includes('copa do mundo')) base = t.includes('club') ? 'Mundial de Clubes' : 'Copa do Mundo';
+        else if (t.includes('copa america') || t.includes('conmebol america')) base = 'Copa America';
+        else if (t.includes('libertadores')) base = 'Libertadores';
+        else if (t.includes('sudamericana') || t.includes('sul-americana')) base = 'Sul-Americana';
+        else if (t.includes('champions')) base = 'Champions League';
+        else if (t.includes('europa league')) base = 'Europa League';
+        else if (t.includes('euro') && !t.includes('europa')) base = 'Eurocopa';
+        else if (t.includes('premier league')) base = 'Premier League';
+        else if (t.includes('laliga') || t.includes('la liga')) base = 'La Liga';
+        else if (t.includes('serie a') && (t.includes('bra') || t.includes('betano'))) base = 'Brasileirao';
+        else if (t.includes('serie b') && t.includes('bra')) base = 'Brasileirao Serie B';
+        else if (t.includes('copa do brasil')) base = 'Copa do Brasil';
+        else if (t.includes('serie a') && t.includes('ita')) base = 'Italiano - Serie A';
+        else if (t.includes('bundesliga')) base = 'Bundesliga';
+        else if (t.includes('ligue 1')) base = 'Ligue 1';
+        else if (t.includes('carioca') || t.includes('paulista') || t.includes('mineiro') || t.includes('gaucho') || t.includes('estadual')) base = 'Estaduais';
+        else if (t.includes('eliminatorias') || t.includes('qualification') || t.includes('qualifier')) base = 'Eliminatorias';
+        else if (t.includes('amistoso') || t.includes('friendly')) base = 'Amistosos';
+        else base = full.replace(/\b(conmebol|uefa|fifa|concacaf)\b/gi, '').replace(/[,-]\s*$/, '').replace(/\s+/g, ' ').trim() || full;
+        // fase/grupo (texto após a vírgula)
+        const comma = full.indexOf(',');
+        let phase = comma >= 0 ? full.slice(comma + 1).trim() : '';
+        if (phase) {
+            phase = phase
+                .replace(/group/i, 'Grupo').replace(/round of 16/i, 'Oitavas').replace(/round of 32/i, '32-avos')
+                .replace(/quarter-?finals?/i, 'Quartas').replace(/semi-?finals?/i, 'Semifinal')
+                .replace(/final/i, 'Final').replace(/playoff/i, 'Playoff').trim();
+        }
+        return phase ? `${base} · ${phase}` : base;
     }
 
     private _agendaConfig(): AgendaConfig {
