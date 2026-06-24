@@ -952,6 +952,8 @@ function LivePlayer({ sources, title, options, onPick }: {
             onKeyDown={onBoxKey}
             onClick={() => { if (!fs && canFs) setFs(true); }}>
             <video ref={ref} controls={fs} autoPlay playsInline className="live-video" />
+            {/* Anel de foco SOBRE o vídeo (box-shadow no container fica escondido atrás dele). */}
+            {!fs && <div className="live-ring" aria-hidden="true" />}
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
             {canFs && !fs && <span className="live-hint">⛶ OK = tela cheia</span>}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}

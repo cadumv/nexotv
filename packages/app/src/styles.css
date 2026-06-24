@@ -110,7 +110,10 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .live-empty { position: absolute; color: #777; font-size: 18px; }
 /* O player inteiro é o alvo do foco: OK = tela cheia. Anel vermelho quando focado. */
 .live-player { cursor: pointer; }
-.live-player:focus { outline: none; box-shadow: inset 0 0 0 3px #e50914; }
+.live-player:focus { outline: none; }
+/* Anel desenhado ACIMA do vídeo (z-index alto), aparece só com o player focado. */
+.live-ring { position: absolute; inset: 0; z-index: 8; border: 4px solid transparent; pointer-events: none; transition: border-color .12s; }
+.live-player:focus .live-ring { border-color: #e50914; }
 /* Dica de tela cheia — aparece só com o player focado; não é focável (não rouba D-pad). */
 .live-hint { position: absolute; top: 12px; right: 12px; z-index: 6; background: rgba(0,0,0,.6); color: #fff; border-radius: 8px; font-size: 13px; font-weight: 700; padding: 7px 12px; opacity: 0; transition: opacity .15s; pointer-events: none; }
 .live-player:focus .live-hint { opacity: 1; }

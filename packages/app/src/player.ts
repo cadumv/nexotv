@@ -117,6 +117,9 @@ export function attachAdaptive(video: HTMLVideoElement, url: string, onFatal: ()
     const ALIVE_EVENTS = ['loadeddata', 'canplay', 'canplaythrough', 'playing', 'timeupdate'];
     const armWatchdog = () => {
         clearWatch();
+        // Engine já conhecida → confiamos nela: SEM timer (o fallback vem dos eventos de
+        // erro reais). Evita o atraso/corte de 3s a cada troca de canal.
+        if (learned[kind]) return;
         watchdog = setTimeout(() => {
             if (destroyed || progressed) return;
             // readyState>=2 (HAVE_CURRENT_DATA) = já tem frame/buffer → só carregando,
