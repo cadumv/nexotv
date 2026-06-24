@@ -808,7 +808,33 @@ function ChannelsView({ engine, cats, flat, loading }: {
         const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
         select(chanIdxs[np]);
     };
-    const onKey = (e: React.KeyboardEvent) => stageNav(e, stageRef.current, move, () => setMode('cats'));
+    // Navegação LISA da lista de categorias: ↑↓ move o foco entre as categorias
+    // (roving focus + scroll), Enter seleciona (onClick do botão), Voltar volta.
+    const catsKey = (e: React.KeyboardEvent) => {
+        const rows = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('.cat-row') || []);
+        if (!rows.length) return;
+        const cur = rows.indexOf(document.activeElement as HTMLElement);
+        if (e.key === 'ArrowDown') { e.preventDefault(); const n = rows[cur < 0 ? 0 : Math.min(rows.length - 1, cur + 1)]; n.focus(); n.scrollIntoView({ block: 'nearest' }); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); const n = rows[cur <= 0 ? 0 : cur - 1]; n.focus(); n.scrollIntoView({ block: 'nearest' }); }
+        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setMode('channels'); }
+        // Enter/OK: o onClick do botão focado dispara pickCat naturalmente.
+    };
+    const onKey = (e: React.KeyboardEvent) => {
+        if (mode === 'cats') catsKey(e);
+        else stageNav(e, stageRef.current, move, () => setMode('cats'));
+    };
+
+    // Ao entrar nas categorias, foca a categoria atual (ou a 1ª) — começa já posicionado.
+    useEffect(() => {
+        if (mode !== 'cats') return;
+        const t = setTimeout(() => {
+            const sc = scrollRef.current; if (!sc) return;
+            const curId = vflat[idx]?.catId;
+            const target = (curId && sc.querySelector<HTMLElement>(`.cat-row[data-cid="${curId}"]`)) || sc.querySelector<HTMLElement>('.cat-row');
+            target?.focus(); target?.scrollIntoView({ block: 'center' });
+        }, 60);
+        return () => clearTimeout(t);
+    }, [mode]);
 
     const curCatName = idx >= 0 ? label(vcats.find(c => c.id === vflat[idx]?.catId)?.name || '') : '';
     const curMeta = vflat[idx]?.meta;
@@ -829,7 +855,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                 <div className="chan-scroll" ref={scrollRef} onScroll={recalcTopCat}>
                     {inCats ? (
                         vcats.map(c => (
-                            <button key={c.id} className={`cat-row${vflat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)}>
+                            <button key={c.id} data-cid={c.id} className={`cat-row${vflat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)} onFocus={focusScroll}>
                                 <span className="cat-row-name">{label(c.name)}</span>
                                 <span className="cat-row-count">{c.count}</span>
                             </button>
