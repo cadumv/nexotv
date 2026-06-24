@@ -29,7 +29,7 @@ type EngineName = 'native' | 'hlsjs';
 const WATCHDOG_MS = 3000;
 
 // Engine que JÁ funcionou, por tipo de stream — persistida entre sessões.
-const ENGINE_LS = 'rajada.engine.v1';
+const ENGINE_LS = 'rajada.engine.v2';
 function loadLearned(): Partial<Record<Kind, EngineName>> {
     try { return JSON.parse(localStorage.getItem(ENGINE_LS) || '{}'); } catch { return {}; }
 }
@@ -107,16 +107,23 @@ export function attachAdaptive(video: HTMLVideoElement, url: string, onFatal: ()
     const fav = learned[kind];
     if (fav) attempts.sort((a, b) => (a.name === fav ? -1 : b.name === fav ? 1 : 0));
 
-    // "tocou de verdade" → grava a engine vencedora e desarma o watchdog.
-    const onProgress = () => {
-        if (video.currentTime > 0.1 || !video.paused) {
-            progressed = true; clearWatch();
-            const cur = attempts[ai - 1]; if (cur) remember(kind, cur.name);
-        }
+    // Sinais de que a engine está VIVA (tem dados/decodificou) → grava a vencedora e
+    // desarma o watchdog de vez. NÃO trocamos mais de engine depois disso.
+    const markAlive = () => {
+        if (progressed) return;
+        progressed = true; clearWatch();
+        const cur = attempts[ai - 1]; if (cur) remember(kind, cur.name);
     };
+    const ALIVE_EVENTS = ['loadeddata', 'canplay', 'canplaythrough', 'playing', 'timeupdate'];
     const armWatchdog = () => {
         clearWatch();
-        watchdog = setTimeout(() => { if (!destroyed && !progressed) advance(); }, WATCHDOG_MS);
+        watchdog = setTimeout(() => {
+            if (destroyed || progressed) return;
+            // readyState>=2 (HAVE_CURRENT_DATA) = já tem frame/buffer → só carregando,
+            // NÃO troca de engine (evita "preto/recarregando" cortando um stream lento).
+            if (video.readyState >= 2) { markAlive(); return; }
+            advance(); // conectou mas 0 dados em Xs → engine travada → tenta a próxima
+        }, WATCHDOG_MS);
     };
 
     let ai = 0;
@@ -126,8 +133,7 @@ export function attachAdaptive(video: HTMLVideoElement, url: string, onFatal: ()
         if (ai >= attempts.length) { onFatal(); return; }
         progressed = false;
         attempts[ai++].run();
-        video.addEventListener('playing', onProgress); video.addEventListener('timeupdate', onProgress);
-        probes.push(['playing', onProgress], ['timeupdate', onProgress]);
+        for (const ev of ALIVE_EVENTS) { video.addEventListener(ev, markAlive); probes.push([ev, markAlive]); }
         armWatchdog();
     }
 

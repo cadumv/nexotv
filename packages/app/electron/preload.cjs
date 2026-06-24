@@ -13,7 +13,7 @@ const PERSIST = [
   'rajada.watched.v1',    // episódios vistos
   'rajada.cw.v1',         // fila "continuar"
   'rajada.chanwatch.v1',  // mais assistidos
-  'rajada.engine.v1',     // engine de vídeo aprendida
+  'rajada.engine.v2',     // engine de vídeo aprendida
   'rajada.vodcat.v1',     // última categoria
   'rajada.vodempty.v1',   // categorias vazias
 ];
