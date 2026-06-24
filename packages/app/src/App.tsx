@@ -234,7 +234,7 @@ function App() {
                     <button className={section === 'games' ? 'on' : ''} onClick={() => setSection('games')}>Jogos ao vivo</button>
                 </nav>
                 <div className="topbar-right">
-                    <button className="search-btn" onClick={() => setSearch(true)} aria-label="Buscar">🔍</button>
+                    <button className="search-btn" onClick={() => { setSearch(true); if (engine && !builtRef.current.games) { builtRef.current.games = true; buildGames(engine); } }} aria-label="Buscar">🔍</button>
                     <button className="logout" onClick={logout}>sair</button>
                 </div>
             </header>
@@ -267,10 +267,11 @@ function App() {
                 </div>
             )}
 
-            {search && engine && <SearchView engine={engine} context={section}
+            {search && engine && <SearchView engine={engine} context={section} games={gamesMetas}
                 onClose={() => setSearch(false)}
                 onDetails={(m) => { setSearch(false); openDetails(m); }}
-                onPlayChannel={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }} />}
+                onPlayChannel={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }}
+                onPlayGame={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }} />}
             {details && engine && <DetailsView engine={engine} meta={details} onClose={() => setDetails(null)} onPlay={(u, t, k, r) => { setDetails(null); play(u, t, k, r); }} />}
             {playing && <Player url={playing.url} title={playing.title} contentKey={playing.key} resumeFrom={playing.resumeFrom} onClose={() => setPlaying(null)} />}
         </div>
@@ -863,8 +864,9 @@ function fmtTime(s: number): string {
 
 /** Busca (overlay): filmes, séries e canais por nome (debounce). Filme/série
  *  abrem detalhes; canal toca direto. */
-function SearchView({ engine, context, onClose, onDetails, onPlayChannel }: {
-    engine: NexoEngine; context: Section; onClose: () => void; onDetails: (m: any) => void; onPlayChannel: (m: any) => void;
+function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel, onPlayGame }: {
+    engine: NexoEngine; context: Section; games: any[]; onClose: () => void;
+    onDetails: (m: any) => void; onPlayChannel: (m: any) => void; onPlayGame: (m: any) => void;
 }) {
     const [q, setQ] = useState('');
     const [res, setRes] = useState<{ movies: any[]; series: any[]; channels: any[] }>({ movies: [], series: [], channels: [] });
@@ -885,7 +887,13 @@ function SearchView({ engine, context, onClose, onDetails, onPlayChannel }: {
             setLoading(false);
         }, 320);
     }, [q]);
-    const total = res.movies.length + res.series.length + res.channels.length;
+    // Jogos: filtro local (times/competição) sobre a agenda já carregada.
+    const gameHits = useMemo(() => {
+        const term = q.trim().toLowerCase(); if (term.length < 2) return [];
+        const norm = (s: string) => String(s || '').toLowerCase();
+        return games.filter(g => norm(g.name).includes(term) || norm(g.tournament).includes(term)).slice(0, 24);
+    }, [q, games]);
+    const total = res.movies.length + res.series.length + res.channels.length + gameHits.length;
     const Sec = (key: string, title: string, metas: any[], onItem: (m: any) => void) => metas.length > 0 && (
         <section className="row" key={key}><h2>{title} <span className="vod-cat-count">{metas.length}</span></h2>
             <div className="tiles">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onItem(m)} />)}</div>
@@ -896,8 +904,15 @@ function SearchView({ engine, context, onClose, onDetails, onPlayChannel }: {
         channels: () => Sec('channels', 'Canais', res.channels, onPlayChannel),
         movies: () => Sec('movies', 'Filmes', res.movies, onDetails),
         series: () => Sec('series', 'Séries', res.series, onDetails),
+        games: () => gameHits.length > 0 && (
+            <section className="row" key="games"><h2>Jogos <span className="vod-cat-count">{gameHits.length}</span></h2>
+                <div className="tiles">{gameHits.map((m: any) => <GameCard key={m.id} meta={m} onPlay={() => onPlayGame(m)} />)}</div>
+            </section>
+        ),
     };
-    const order = context === 'channels' ? ['channels', 'movies', 'series'] : ['movies', 'series', 'channels'];
+    const order = context === 'channels' ? ['channels', 'games', 'movies', 'series']
+        : context === 'games' ? ['games', 'channels', 'movies', 'series']
+            : ['movies', 'series', 'channels', 'games'];
     return (
         <div className="search-ov">
             <div className="search-bar">
