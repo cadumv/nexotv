@@ -51,7 +51,7 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
 }
 
 interface Row { id: string; type: string; name: string; metas: any[]; }
-type Section = 'pick' | 'movies' | 'series' | 'channels';
+type Section = 'pick' | 'vod' | 'channels';
 // Lista plana de canais com divisores: 'header' marca o início de uma categoria,
 // 'chan' é um canal. Permite zapear ↑↓ atravessando categorias (com divisor visível).
 interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?: any; }
@@ -68,7 +68,6 @@ function App() {
     const [chanFlat, setChanFlat] = useState<FlatItem[]>([]);
     const [catFirst, setCatFirst] = useState<Record<string, number>>({});
     const [chanLoading, setChanLoading] = useState(false);
-    const [pickArt, setPickArt] = useState<{ movies?: string; series?: string; chanLogos?: string[] }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
@@ -174,60 +173,53 @@ function App() {
     // Constrói a seção ao entrar nela (uma vez).
     useEffect(() => {
         if (!engine || !saved) return;
-        if ((section === 'movies' || section === 'series') && !builtRef.current.vod) { builtRef.current.vod = true; buildVod(engine, saved.options); }
+        if (section === 'vod' && !builtRef.current.vod) { builtRef.current.vod = true; buildVod(engine, saved.options); }
         if (section === 'channels' && !builtRef.current.channels) { builtRef.current.channels = true; buildChannels(engine); }
     }, [section, engine, saved, buildVod, buildChannels]);
-
-    // Arte dos cards da tela inicial (estilo Netflix): pôster real de filme/série +
-    // colagem de logos de canais. Buscado em 2º plano (cards mostram gradiente até lá).
-    useEffect(() => {
-        if (!engine) return;
-        let dead = false;
-        (async () => {
-            try {
-                const cats: any[] = engine.getManifest().catalogs;
-                const findId = (id: string) => cats.find((c: any) => c.id === id);
-                const firstPoster = async (catId: string) => {
-                    const c = findId(catId); if (!c) return undefined;
-                    const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
-                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
-                    if (withP) return withP.poster;
-                    if (metas[0]) { const u = await engine.getTmdbPosterFor(metas[0].id).catch(() => null); return u || metas[0].poster; }
-                    return undefined;
-                };
-                const [movies, series] = await Promise.all([firstPoster('nexotv_vod'), firstPoster('nexotv_series')]);
-                let chanLogos: string[] = [];
-                const ch = cats.find((c: any) => c.id.startsWith('iptv_channels_g_'));
-                if (ch) { const { metas } = await engine.getCatalog({ type: ch.type, id: ch.id }); chanLogos = metas.slice(0, 4).map((m: any) => (Array.isArray(m.posterChain) && m.posterChain[0]) || m.poster).filter(Boolean); }
-                if (!dead) setPickArt({ movies, series, chanLogos });
-            } catch { /* mantém gradiente */ }
-        })();
-        return () => { dead = true; };
-    }, [engine]);
 
     const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
-    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} art={pickArt} />;
+    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} />;
 
-    const cwFor = (t: string) => cw.filter((m: any) => m.type === t);
+    const cwAll = cw.filter((m: any) => m.type === 'movie' || m.type === 'series');
 
     return (
         <div className={`home ${section}`} ref={homeRef} onKeyDown={section === 'channels' ? undefined : onKey}>
             <header className="topbar">
                 <button className="brand-sm" onClick={() => setSection('pick')}>RAJADA</button>
                 <nav className="tabs-top">
-                    <button className={section === 'movies' ? 'on' : ''} onClick={() => setSection('movies')}>Filmes</button>
-                    <button className={section === 'series' ? 'on' : ''} onClick={() => setSection('series')}>Séries</button>
-                    <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
+                    <button className={section === 'vod' ? 'on' : ''} onClick={() => setSection('vod')}>Filmes e Séries</button>
+                    <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais ao vivo</button>
                 </nav>
                 <button className="logout" onClick={logout}>sair</button>
             </header>
 
             {status && <div className="status">{status}</div>}
 
-            {section === 'movies' && <Rows rows={movieRows} cw={cwFor('movie')} onOpen={openItem} loading={vodLoading} empty="Nenhum filme (provedor fora do ar?)" />}
-            {section === 'series' && <Rows rows={seriesRows} cw={cwFor('series')} onOpen={openItem} loading={vodLoading} empty="Nenhuma série (provedor fora do ar?)" />}
+            {section === 'vod' && (
+                vodLoading && !movieRows.length && !seriesRows.length ? <div className="status">Carregando…</div> : (
+                    <>
+                        {cwAll.length > 0 && (
+                            <section className="row"><h2>Continuar Assistindo</h2>
+                                <div className="tiles">{cwAll.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
+                            </section>
+                        )}
+                        {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
+                        {movieRows.map(row => (
+                            <section className="row" key={row.id}><h2>{row.name}</h2>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
+                            </section>
+                        ))}
+                        {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
+                        {seriesRows.map(row => (
+                            <section className="row" key={row.id}><h2>{row.name}</h2>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
+                            </section>
+                        ))}
+                    </>
+                )
+            )}
             {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} catFirst={catFirst} loading={chanLoading} />}
 
             {picker && (
@@ -248,33 +240,28 @@ function App() {
     );
 }
 
-/** Tela inicial estilo Netflix: 3 cards com arte real (pôster de filme/série,
- *  colagem de logos pros canais), gradiente, título embaixo e zoom no hover. */
-function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { movies?: string; series?: string; chanLogos?: string[] } }) {
-    const card = (sec: Section, label: string, emoji: string, bg?: string, logos?: string[]) => (
-        <button className={`pick-card pc-${sec}`} onClick={() => onPick(sec)}
-            style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
-            {logos && logos.length > 0 && (
-                <div className="pc-collage">
-                    {logos.slice(0, 4).map((l, i) => (
-                        <img key={i} src={l} alt="" loading="lazy" onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-                    ))}
-                </div>
-            )}
-            <div className="pc-grad" />
-            <span className="pc-play">▶</span>
-            <div className="pc-foot"><span className="pc-emoji">{emoji}</span><span className="pc-label">{label}</span></div>
-        </button>
-    );
+/** Tela inicial: 2 cards grandes com ILUSTRAÇÃO temática (pipoca = Filmes e Séries;
+ *  bola/AO VIVO = Canais). SVG embutido (nítido, nunca quebra). */
+function PickScreen({ onPick, onLogout, status }: { onPick: (s: Section) => void; onLogout: () => void; status: string }) {
     return (
         <div className="pick">
             <header className="pick-top"><span className="brand-sm">RAJADA</span><button className="logout" onClick={onLogout}>sair</button></header>
             <div className="pick-body">
                 <h2 className="pick-sub">O que você quer assistir?</h2>
                 <div className="pick-cards">
-                    {card('movies', 'Filmes', '🎬', art.movies)}
-                    {card('series', 'Séries', '📺', art.series)}
-                    {card('channels', 'Canais ao vivo', '📡', undefined, art.chanLogos)}
+                    <button className="pick-card pc-vod" onClick={() => onPick('vod')}>
+                        <div className="pc-art"><PopcornArt /></div>
+                        <div className="pc-grad" />
+                        <span className="pc-play">▶</span>
+                        <div className="pc-foot"><span className="pc-label">Filmes e Séries</span></div>
+                    </button>
+                    <button className="pick-card pc-channels" onClick={() => onPick('channels')}>
+                        <div className="pc-art"><LiveBallArt /></div>
+                        <div className="pc-grad" />
+                        <span className="pc-live">● AO VIVO</span>
+                        <span className="pc-play">▶</span>
+                        <div className="pc-foot"><span className="pc-label">Canais ao vivo</span></div>
+                    </button>
                 </div>
                 {status && <div className="status">{status}</div>}
             </div>
@@ -282,23 +269,54 @@ function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) =>
     );
 }
 
-/** Fileiras estilo Netflix (filmes/séries). */
-function Rows({ rows, cw, onOpen, loading, empty }: { rows: Row[]; cw: any[]; onOpen: (m: any) => void; loading: boolean; empty: string }) {
-    if (loading && !rows.length) return <div className="status">Carregando…</div>;
-    if (!loading && !rows.length) return <div className="status">{empty}</div>;
+/** Ilustração: balde de pipoca de cinema (Filmes e Séries). */
+function PopcornArt() {
     return (
-        <>
-            {cw.length > 0 && (
-                <section className="row"><h2>Continuar Assistindo</h2>
-                    <div className="tiles">{cw.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
-                </section>
-            )}
-            {rows.map(row => (
-                <section className="row" key={row.id}><h2>{row.name}</h2>
-                    <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
-                </section>
-            ))}
-        </>
+        <svg viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+            <g>
+                {/* pipoca */}
+                <g fill="#fff3cf">
+                    <circle cx="74" cy="66" r="15" /><circle cx="96" cy="54" r="18" /><circle cx="118" cy="64" r="16" />
+                    <circle cx="132" cy="78" r="12" /><circle cx="62" cy="80" r="12" />
+                    <circle cx="86" cy="72" r="14" /><circle cx="108" cy="76" r="13" />
+                </g>
+                <g fill="#ffe49b">
+                    <circle cx="96" cy="60" r="9" /><circle cx="118" cy="70" r="8" /><circle cx="78" cy="74" r="8" />
+                </g>
+                {/* balde com listras */}
+                <path d="M62 86 L138 86 L128 176 L72 176 Z" fill="#fafafa" />
+                <g fill="#e50914">
+                    <path d="M62 86 L74 86 L70 176 L72 176 Z" />
+                    <path d="M86 86 L98 86 L96 176 L88 176 Z" />
+                    <path d="M110 86 L122 86 L116 176 L108 176 Z" />
+                    <path d="M134 86 L138 86 L128 176 L122 176 Z" />
+                </g>
+                <path d="M58 86 L142 86 L140 98 L60 98 Z" fill="#c20710" />
+            </g>
+        </svg>
+    );
+}
+
+/** Ilustração: bola de futebol no gramado (Canais ao vivo). */
+function LiveBallArt() {
+    return (
+        <svg viewBox="0 0 200 200" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+            {/* linhas do gramado */}
+            <g stroke="rgba(255,255,255,.18)" strokeWidth="3" fill="none">
+                <circle cx="100" cy="150" r="40" /><line x1="0" y1="150" x2="200" y2="150" />
+            </g>
+            {/* bola */}
+            <circle cx="100" cy="92" r="52" fill="#fff" />
+            <g fill="#0c1a16">
+                <polygon points="100,70 116,82 110,101 90,101 84,82" />
+                <polygon points="100,44 112,52 108,64 92,64 88,52" opacity=".85" />
+                <polygon points="60,80 74,76 80,90 70,102 58,96" opacity=".85" />
+                <polygon points="140,80 126,76 120,90 130,102 142,96" opacity=".85" />
+                <polygon points="78,116 92,108 100,118 92,132 78,128" opacity=".85" />
+                <polygon points="122,116 108,108 100,118 108,132 122,128" opacity=".85" />
+            </g>
+            <circle cx="100" cy="92" r="52" fill="none" stroke="#0c1a16" strokeWidth="3" />
+        </svg>
     );
 }
 
