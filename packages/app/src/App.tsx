@@ -60,6 +60,18 @@ function App() {
     const [status, setStatus] = useState('');
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
+    const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
+    const [hero, setHero] = useState<any | null>(null);
+    const homeRef = useRef<HTMLDivElement>(null);
+
+    const recordCw = (meta: any) => {
+        setCw(prev => {
+            const next = [{ id: meta.id, name: meta.name, poster: meta.poster, posterShape: meta.posterShape, type: meta.type },
+            ...prev.filter((x: any) => x.id !== meta.id)].slice(0, 20);
+            localStorage.setItem('rajada.cw.v1', JSON.stringify(next));
+            return next;
+        });
+    };
 
     const play = (url: string, title: string) => { setPicker(null); setPlaying({ url, title }); };
 
@@ -67,6 +79,7 @@ function App() {
         if (!engine) return;
         const streams = await engine.getStreams(meta.id);
         if (!streams.length) { setStatus('Sem stream disponível'); setTimeout(() => setStatus(''), 2500); return; }
+        recordCw(meta);
         if (streams.length === 1) { play(streams[0].url, meta.name); return; }
         // Várias opções (qualidades / canais da família) → mostra o seletor.
         setPicker({
@@ -74,6 +87,28 @@ function App() {
             options: streams.map((s: any) => ({ label: String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || meta.name, url: s.url })),
         });
     }, [engine]);
+
+    // Navegação por controle (D-pad): setas movem o foco entre tiles/fileiras.
+    const onKey = useCallback((e: React.KeyboardEvent) => {
+        const k = e.key;
+        if (!k.startsWith('Arrow')) return;
+        const root = homeRef.current; if (!root) return;
+        const rowsEls = Array.from(root.querySelectorAll('.tiles')) as HTMLElement[];
+        const active = document.activeElement as HTMLElement;
+        const focusIn = (row: HTMLElement, idx: number) => { const t = Array.from(row.querySelectorAll('.tile')) as HTMLElement[]; t[Math.max(0, Math.min(idx, t.length - 1))]?.focus(); };
+        const ri = rowsEls.findIndex(r => r.contains(active));
+        e.preventDefault();
+        if (ri < 0) { if (rowsEls[0]) focusIn(rowsEls[0], 0); }
+        else {
+            const tiles = Array.from(rowsEls[ri].querySelectorAll('.tile')) as HTMLElement[];
+            const ci = tiles.indexOf(active);
+            if (k === 'ArrowRight') tiles[Math.min(ci + 1, tiles.length - 1)]?.focus();
+            else if (k === 'ArrowLeft') tiles[Math.max(ci - 1, 0)]?.focus();
+            else if (k === 'ArrowDown') { if (rowsEls[ri + 1]) focusIn(rowsEls[ri + 1], ci); }
+            else if (k === 'ArrowUp') { if (rowsEls[ri - 1]) focusIn(rowsEls[ri - 1], ci); else (root.querySelector('.hero-play') as HTMLElement)?.focus(); }
+        }
+        setTimeout(() => (document.activeElement as HTMLElement)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }), 0);
+    }, []);
 
     const boot = useCallback(async (s: SavedConfig) => {
         setStatus('Carregando…');
@@ -103,6 +138,16 @@ function App() {
             setRows(built);
             setStatus(built.length ? '' : 'Nenhum conteúdo (provedor fora do ar?)');
 
+            // Banner de destaque (hero): um filme/série com capa; busca a arte landscape no meta.
+            (async () => {
+                const cand = built.flatMap(r => r.metas).find((m: any) => (m.type === 'movie' || m.type === 'series') && m.poster && !/placehold/.test(m.poster))
+                    || built.flatMap(r => r.metas)[0];
+                if (!cand) return;
+                let image = cand.poster; let description = '';
+                try { const mm = await eng.getMeta(cand.type, cand.id); image = mm.meta?.background || mm.meta?.poster || cand.poster; description = mm.meta?.description || ''; } catch { }
+                setHero({ ...cand, image, description });
+            })();
+
             // Posters dinâmicos (TMDB) — preenche capas faltantes em 2º plano (estilo Stremio).
             if (s.options.tmdbApiKey) {
                 (async () => {
@@ -131,11 +176,31 @@ function App() {
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
 
     return (
-        <div className="home">
+        <div className="home" ref={homeRef} onKeyDown={onKey}>
             <header className="topbar"><span className="brand-sm">RAJADA</span>
                 <button className="logout" onClick={() => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setRows([]); }}>sair</button>
             </header>
+
+            {hero && (
+                <section className="hero" style={{ backgroundImage: `url("${hero.image}")` }}>
+                    <div className="hero-grad" />
+                    <div className="hero-info">
+                        <h1 className="hero-title">{hero.name}</h1>
+                        {hero.description && <p className="hero-desc">{String(hero.description).split('\n')[0]}</p>}
+                        <button className="hero-play" onClick={() => openItem(hero)}>▶ Assistir</button>
+                    </div>
+                </section>
+            )}
+
             {status && <div className="status">{status}</div>}
+
+            {cw.length > 0 && (
+                <section className="row">
+                    <h2>Continuar Assistindo</h2>
+                    <div className="tiles">{cw.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
+                </section>
+            )}
+
             {rows.map(row => (
                 <section className="row" key={row.id}>
                     <h2>{row.name}</h2>
