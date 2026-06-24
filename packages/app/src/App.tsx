@@ -386,15 +386,20 @@ function qualityRank(title: string): number {
     const t = String(title || '');
     if (/fhd|1080/i.test(t)) return 3; if (/\bhd\b|720/i.test(t)) return 2; if (/\bsd\b|480/i.test(t)) return 1; return 0;
 }
-// Agrupa streams por marca, mantendo a melhor qualidade de cada uma.
-function dedupStreams(streams: any[]): { label: string; url: string }[] {
-    const groups = new Map<string, { label: string; url: string; q: number }>();
+// Agrupa streams por marca, MAS mantém todos os feeds de cada marca (ordenados
+// pela melhor qualidade) — viram a cadeia de fallback automático do player.
+function dedupStreams(streams: any[]): { label: string; urls: string[] }[] {
+    const groups = new Map<string, { label: string; items: { url: string; q: number }[] }>();
     for (const s of streams || []) {
-        const b = providerBrand(s.title || ''); const q = qualityRank(s.title || '');
-        const cur = groups.get(b);
-        if (!cur || q > cur.q) groups.set(b, { label: b, url: s.url, q });
+        if (!s?.url) continue;
+        const b = providerBrand(s.title || '');
+        if (!groups.has(b)) groups.set(b, { label: b, items: [] });
+        groups.get(b)!.items.push({ url: s.url, q: qualityRank(s.title || '') });
     }
-    return [...groups.values()].map(({ label, url }) => ({ label, url }));
+    return [...groups.values()].map(g => ({
+        label: g.label,
+        urls: [...new Set(g.items.sort((a, b) => b.q - a.q).map(x => x.url))],
+    }));
 }
 // Rola o chip focado pra dentro da vista (D-pad na TV / Tab na web).
 const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ inline: 'center', block: 'nearest' });
@@ -462,7 +467,7 @@ function GameRow({ meta }: { meta: any }) {
  *  transmissão (qualidade/canal). Mesmo layout dos Canais. */
 function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas: any[]; start: any; onBack: () => void }) {
     const [idx, setIdx] = useState(-1);
-    const [url, setUrl] = useState('');
+    const [sources, setSources] = useState<string[]>([]); // cadeia de fontes da marca atual (failover)
     const [title, setTitle] = useState('');
     const [opts, setOpts] = useState<any[]>([]);
     const [note, setNote] = useState('');
@@ -487,9 +492,9 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
         setTitle(`${g.home} × ${g.away || ''}`.trim()); setNote('');
         try {
             const streams = await engine.getStreams(it.meta.id);
-            setOpts(streams); setUrl(streams[0]?.url || '');
+            setOpts(streams); setSources(dedupStreams(streams)[0]?.urls || []);
             if (!streams.length) setNote(g.live ? 'Transmissão indisponível no momento.' : `Começa ${g.when}.`);
-        } catch { setOpts([]); setUrl(''); setNote('Não foi possível carregar a transmissão.'); }
+        } catch { setOpts([]); setSources([]); setNote('Não foi possível carregar a transmissão.'); }
     }, [engine, gflat]);
 
     const select = useCallback((i: number, now = false) => {
@@ -536,13 +541,13 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer url={url} title={title} />
+                <LivePlayer sources={sources} title={title} />
                 <div className="chan-now">
                     <span className="now-title">{title || 'Selecione um jogo'}{note && <em className="now-note"> — {note}</em>}</span>
                     {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
                         <div className="now-opts">
                             {ds.map((o, i) => (
-                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)} onFocus={focusScroll}>
+                                <button key={i} className={`now-opt${o.urls[0] === sources[0] ? ' on' : ''}`} onClick={() => setSources(o.urls)} onFocus={focusScroll}>
                                     {o.label}
                                 </button>
                             ))}
@@ -578,7 +583,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
 }) {
     const [mode, setMode] = useState<'cats' | 'channels'>('channels'); // entra nos canais (já tocando)
     const [idx, setIdx] = useState(-1);          // índice (no vflat) do canal selecionado
-    const [url, setUrl] = useState('');
+    const [sources, setSources] = useState<string[]>([]); // cadeia de fontes da marca atual (failover)
     const [title, setTitle] = useState('');
     const [opts, setOpts] = useState<any[]>([]);
     const [watch] = useState<Record<string, number>>(loadWatch); // snapshot do histórico (não reembaralha na sessão)
@@ -614,8 +619,8 @@ function ChannelsView({ engine, cats, flat, loading }: {
         setTitle(it.meta.name);
         // conta como assistido (histórico p/ "Mais assistidos") — persiste sem reembaralhar agora
         try { const w = loadWatch(); w[it.meta.name] = (w[it.meta.name] || 0) + 1; localStorage.setItem(WATCH_KEY, JSON.stringify(w)); } catch { }
-        try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setUrl(streams[0]?.url || ''); }
-        catch { setOpts([]); setUrl(''); }
+        try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setSources(dedupStreams(streams)[0]?.urls || []); }
+        catch { setOpts([]); setSources([]); }
     }, [engine, vflat]);
 
     const select = useCallback((i: number, now = false) => {
@@ -689,13 +694,13 @@ function ChannelsView({ engine, cats, flat, loading }: {
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer url={url} title={title} />
+                <LivePlayer sources={sources} title={title} />
                 <div className="chan-now">
                     <span className="now-title">{title || 'Selecione um canal'}</span>
                     {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
                         <div className="now-opts">
                             {ds.map((o, i) => (
-                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)} onFocus={focusScroll}>
+                                <button key={i} className={`now-opt${o.urls[0] === sources[0] ? ' on' : ''}`} onClick={() => setSources(o.urls)} onFocus={focusScroll}>
                                     {o.label}
                                 </button>
                             ))}
@@ -707,28 +712,37 @@ function ChannelsView({ engine, cats, flat, loading }: {
     );
 }
 
-/** Player embutido (canais ao vivo): troca de fonte ao zapear, sem fechar. */
-function LivePlayer({ url, title }: { url: string; title: string }) {
+/** Player embutido (canais/jogos ao vivo): recebe a CADEIA de fontes daquela
+ *  marca (várias regionais/qualidades) e faz failover automático — se uma falha,
+ *  já tenta a próxima sozinho. Troca de fonte ao zapear, sem fechar. */
+function LivePlayer({ sources, title }: { sources: string[]; title: string }) {
     const ref = useRef<HTMLVideoElement>(null);
-    const [err, setErr] = useState(false);
+    const [i, setI] = useState(0);          // fonte atual dentro da cadeia
+    const [dead, setDead] = useState(false); // todas as fontes falharam
+    // Nova seleção (canal/jogo/marca) → recomeça da melhor fonte.
+    useEffect(() => { setI(0); setDead(false); }, [sources]);
+    const url = sources[i] || '';
     useEffect(() => {
-        setErr(false);
         const v = ref.current; if (!v || !url) return;
+        let cancelled = false;
+        const next = () => { if (cancelled) return; if (i < sources.length - 1) setI(i + 1); else setDead(true); };
         const isHls = /\.m3u8(\?|$)|\.ts(\?|$)/i.test(url) || url.includes('/live/');
         let hls: Hls | null = null;
         if (isHls && Hls.isSupported()) {
             hls = new Hls({ enableWorker: true, lowLatencyMode: false });
             hls.loadSource(url); hls.attachMedia(v);
-            hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) setErr(true); });
-        } else { v.src = url; v.addEventListener('error', () => setErr(true), { once: true }); }
+            hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) next(); });
+        } else { v.src = url; v.addEventListener('error', next, { once: true }); }
         const p = v.play(); if (p && p.catch) p.catch(() => { });
-        return () => { try { hls?.destroy(); } catch { } };
-    }, [url]);
+        return () => { cancelled = true; try { hls?.destroy(); } catch { } };
+    }, [url, i, sources]);
+    const trying = i > 0 && !dead;
     return (
         <div className="live-player">
             <video ref={ref} controls autoPlay playsInline className="live-video" />
-            {!url && <div className="live-empty">▶ Selecione um canal na lista</div>}
-            {err && url && (<div className="player-err">Não consegui tocar.<button onClick={() => window.open(url, '_blank')}>Abrir externo</button></div>)}
+            {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
+            {trying && <div className="live-fallback">Fonte instável — tentando alternativa {i + 1}/{sources.length}…</div>}
+            {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
         </div>
     );
 }
