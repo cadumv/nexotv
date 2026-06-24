@@ -19,8 +19,9 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
     const [m3u, setM3u] = useState('');
     const [epg, setEpg] = useState('');
     const [agenda, setAgenda] = useState('');
+    const [tmdb, setTmdb] = useState('');
     const save = () => {
-        const options: EngineOptions = { addonName: 'Rajada', sofascoreAgendaUrl: agenda.trim() || null };
+        const options: EngineOptions = { addonName: 'Rajada', sofascoreAgendaUrl: agenda.trim() || null, tmdbApiKey: tmdb.trim() || null };
         if (mode === 'xtream') {
             onSave({ config: { provider: 'xtream', xtreamUrl: url.trim(), xtreamUsername: user.trim(), xtreamPassword: pass.trim(), enableVod: true }, options });
         } else {
@@ -43,6 +44,7 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
                 <input placeholder="EPG URL (opcional)" value={epg} onChange={e => setEpg(e.target.value)} />
             </>)}
             <input placeholder="Agenda Futebol URL (opcional, Worker /agenda)" value={agenda} onChange={e => setAgenda(e.target.value)} />
+            <input placeholder="TMDB API key (opcional, posters bonitos)" value={tmdb} onChange={e => setTmdb(e.target.value)} />
             <button onClick={save}>Entrar</button>
         </div>
     );
@@ -98,6 +100,25 @@ function App() {
             }))).filter(Boolean) as Row[];
             setRows(built);
             setStatus(built.length ? '' : 'Nenhum conteúdo (provedor fora do ar?)');
+
+            // Posters dinâmicos (TMDB) — preenche capas faltantes em 2º plano (estilo Stremio).
+            if (s.options.tmdbApiKey) {
+                (async () => {
+                    const targets: { rowId: string; id: string }[] = [];
+                    for (const r of built) if (r.type === 'movie' || r.type === 'series')
+                        for (const m of r.metas) if (!m.poster || /placehold\.co/.test(m.poster)) targets.push({ rowId: r.id, id: m.id });
+                    let i = 0;
+                    const worker = async () => {
+                        while (i < targets.length) {
+                            const t = targets[i++];
+                            const url = await eng.getTmdbPosterFor(t.id).catch(() => null);
+                            if (url) for (const r of built) if (r.id === t.rowId) for (const m of r.metas) if (m.id === t.id) m.poster = url;
+                        }
+                    };
+                    await Promise.all(Array.from({ length: 4 }, worker));
+                    setRows(built.map(r => ({ ...r, metas: [...r.metas] })));
+                })();
+            }
         } catch (e: any) {
             setStatus('Erro: ' + (e?.message || e));
         }

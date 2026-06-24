@@ -686,6 +686,18 @@ export class NexoEngine {
         };
     }
 
+    /** Poster do TMDB para um filme/série (preenche capas faltantes, estilo Stremio). */
+    async getTmdbPosterFor(id: string): Promise<string | null> {
+        let item: any = null; let type: 'movie' | 'tv' | null = null;
+        if (id.startsWith(`vod${this.idPrefix}_`)) { item = this.movieMap.get(id); type = 'movie'; }
+        else if (id.startsWith(`ser${this.idPrefix}_`)) { item = this.seriesMap.get(id); type = 'tv'; }
+        if (!item || !type) return null;
+        try {
+            const t = await fetchTmdbMeta(this.http, this.options.tmdbApiKey, item.name, item.year, type);
+            return t?.poster || null;
+        } catch { return null; }
+    }
+
     async getMovieMeta(id: string) {
         const m = this.movieMap.get(id);
         if (!m) return null;
