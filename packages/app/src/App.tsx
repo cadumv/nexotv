@@ -823,6 +823,33 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const timer = useRef<any>(null);
     const interacted = useRef(false);
     const [spin, setSpin] = useState(0); // índice da auto-rotação (billboard ocioso)
+    const [cat, setCat] = useState<string>('__all');     // categoria selecionada (chips)
+    const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // categorias buscadas sob demanda
+    const [loadingCat, setLoadingCat] = useState(false);
+
+    // Todas as categorias do catálogo (filmes + séries) → botões.
+    const catList = useMemo(() => {
+        const cats = ((engine.getManifest() as any).catalogs || []) as any[];
+        const mk = (c: any) => ({ id: c.id, name: c.name, type: c.type });
+        const movies = cats.filter(c => c.id === 'nexotv_vod' || c.id.startsWith('nexotv_vod_g_')).map(mk);
+        const series = cats.filter(c => c.id === 'nexotv_series' || c.id.startsWith('nexotv_series_g_')).map(mk);
+        return [...movies, ...series];
+    }, [engine]);
+
+    // Ao escolher uma categoria não carregada ainda, busca sob demanda.
+    useEffect(() => {
+        if (cat === '__all') return;
+        const inRows = [...movieRows, ...seriesRows].some(r => r.id === cat);
+        if (inRows || loaded[cat]) return;
+        const def = catList.find(c => c.id === cat);
+        if (!def) return;
+        let dead = false; setLoadingCat(true);
+        engine.getCatalog({ type: def.type, id: def.id })
+            .then(({ metas }: any) => { if (!dead) setLoaded(p => ({ ...p, [cat]: metas || [] })); })
+            .catch(() => { if (!dead) setLoaded(p => ({ ...p, [cat]: [] })); })
+            .finally(() => { if (!dead) setLoadingCat(false); });
+        return () => { dead = true; };
+    }, [cat]);
 
     // Destaques: bem avaliados (nota desc), únicos. Semeia o board e a fileira.
     const featured = useMemo(() => {
@@ -890,23 +917,45 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                 </div>
             </div>
             <div className="vod-rows">
-                {rows.map(r => (
-                    <section className="row" key={r.id}><h2>{r.name}</h2>
-                        <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
-                    </section>
-                ))}
-                {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
-                {movieRows.map(row => (
-                    <section className="row" key={row.id}><h2>{row.name}</h2>
-                        <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
-                    </section>
-                ))}
-                {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
-                {seriesRows.map(row => (
-                    <section className="row" key={row.id}><h2>{row.name}</h2>
-                        <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
-                    </section>
-                ))}
+                <div className="vod-cats">
+                    <button className={`vod-cat${cat === '__all' ? ' on' : ''}`} onClick={() => setCat('__all')} onFocus={focusScroll}>Tudo</button>
+                    {catList.map(c => (
+                        <button key={c.id} className={`vod-cat${cat === c.id ? ' on' : ''}`} onClick={() => setCat(c.id)} onFocus={focusScroll}>{c.name}</button>
+                    ))}
+                </div>
+                {cat === '__all' ? (
+                    <>
+                        {rows.map(r => (
+                            <section className="row" key={r.id}><h2>{r.name}</h2>
+                                <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                            </section>
+                        ))}
+                        {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
+                        {movieRows.map(row => (
+                            <section className="row" key={row.id}><h2>{row.name}</h2>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                            </section>
+                        ))}
+                        {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
+                        {seriesRows.map(row => (
+                            <section className="row" key={row.id}><h2>{row.name}</h2>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                            </section>
+                        ))}
+                    </>
+                ) : (() => {
+                    const r = [...movieRows, ...seriesRows].find(x => x.id === cat);
+                    const metas = r ? r.metas : (loaded[cat] || []);
+                    if (loadingCat && !metas.length) return <div className="connecting"><span className="spin" /> Carregando categoria…</div>;
+                    if (!metas.length) return <div className="status">Nada nesta categoria.</div>;
+                    const name = (catList.find(c => c.id === cat) || {} as any).name || '';
+                    return (
+                        <section className="vod-cat-sec">
+                            <h2 className="sec-head">{name} <span className="vod-cat-count">{metas.length}</span></h2>
+                            <div className="vod-grid">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                        </section>
+                    );
+                })()}
             </div>
         </div>
     );
