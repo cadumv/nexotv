@@ -269,11 +269,31 @@ function Player({ url, title, onClose }: { url: string; title: string; onClose: 
     );
 }
 
+// Forma decidida pelo TIPO de conteúdo (não confia só no posterShape, que pode vir
+// faltando): canal/tv = quadrado, jogo = landscape, filme/série = pôster 2:3.
+function shapeFor(meta: any): 'square' | 'landscape' | 'poster' {
+    if (meta.posterShape === 'square' || meta.posterShape === 'landscape' || meta.posterShape === 'poster') return meta.posterShape;
+    if (meta.type === 'tv') return 'square';
+    if (typeof meta.id === 'string' && meta.id.startsWith('game')) return 'landscape';
+    return 'poster';
+}
+// Card gerado (cor determinística pelo nome) como último recurso se a imagem falhar.
+function cardFor(name: string) {
+    const s = name || 'TV'; let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    const pal = ['1f3a5f', '3a1f5f', '5f1f2e', '1f5f3a', '5f4a1f', '2e1f5f', '1f5f5a', '5f1f4a', '24304a', '402a2a'];
+    return `https://placehold.co/320x320/${pal[h % pal.length]}/FFFFFF.png?text=${encodeURIComponent(s)}&font=oswald`;
+}
 function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
-    const shape = meta.posterShape || 'poster';
+    const shape = shapeFor(meta);
+    const onErr = (e: React.SyntheticEvent<HTMLImageElement>) => {
+        const img = e.currentTarget;
+        const card = cardFor(meta.name);
+        if (img.src !== card) img.src = card;          // logo quebrado → card (nunca fica vazio)
+    };
     return (
         <button className={`tile ${shape}`} onClick={onPlay} aria-label={meta.name}>
-            {meta.poster && <img src={meta.poster} alt={meta.name} loading="lazy" />}
+            <img src={meta.poster || cardFor(meta.name)} alt={meta.name} loading="lazy" onError={onErr} />
             <span className="tile-name">{meta.name}</span>
         </button>
     );

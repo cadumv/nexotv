@@ -308,11 +308,9 @@ export class NexoEngine {
 
     deriveFallbackLogoUrl(item: any) {
         const own = item.attributes?.['tvg-logo'] || item.logo;
-        // Ordem (visual consistente sozinho):
-        // 1) banco curado iptv-org (transparente, estilo uniforme) p/ canal conhecido
-        // 2) logo do próprio canal; 3) logo de irmão da mesma marca (índice do provedor)
-        let finalUrl = this._findBankLogo(item.name || '')
-            || ((own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || ''));
+        // 1) logo do próprio canal (sabemos que carrega p/ esse provedor);
+        // 2) irmão da mesma marca / banco curado (índice do provedor).
+        let finalUrl = (own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || '');
         if (finalUrl) {
             if (finalUrl.includes('imgur.com')) finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
             // trim=10 corta bordas/margens uniformes (logos preenchem melhor); bg igual
