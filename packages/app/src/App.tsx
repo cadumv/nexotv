@@ -56,6 +56,39 @@ type Section = 'pick' | 'vod' | 'channels' | 'games';
 // 'chan' é um canal. Permite zapear ↑↓ atravessando categorias (com divisor visível).
 interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?: any; }
 
+// --- Navegação por D-pad (controle de TV): movimento espacial do foco -----------
+// Elementos focáveis VISÍVEIS na tela.
+function navFocusables(): HTMLElement[] {
+    const sel = 'button:not([disabled]), [tabindex]:not([tabindex="-1"]), a[href], input:not([disabled])';
+    return Array.from(document.querySelectorAll<HTMLElement>(sel))
+        .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
+}
+// Move o foco pro elemento mais próximo na direção da seta (geometria).
+function spatialMove(dir: string): boolean {
+    const cur = document.activeElement as HTMLElement | null;
+    const els = navFocusables();
+    if (!els.length) return false;
+    if (!cur || !els.includes(cur)) { els[0].focus(); return true; }
+    const c = cur.getBoundingClientRect();
+    const ccx = (c.left + c.right) / 2, ccy = (c.top + c.bottom) / 2;
+    let best: HTMLElement | null = null, bestScore = Infinity;
+    for (const el of els) {
+        if (el === cur) continue;
+        const r = el.getBoundingClientRect();
+        const dx = (r.left + r.right) / 2 - ccx, dy = (r.top + r.bottom) / 2 - ccy;
+        let primary = 0, cross = 0, ok = false;
+        if (dir === 'ArrowRight') { ok = r.left >= c.right - 4; primary = dx; cross = Math.abs(dy); }
+        else if (dir === 'ArrowLeft') { ok = r.right <= c.left + 4; primary = -dx; cross = Math.abs(dy); }
+        else if (dir === 'ArrowDown') { ok = r.top >= c.bottom - 4; primary = dy; cross = Math.abs(dx); }
+        else if (dir === 'ArrowUp') { ok = r.bottom <= c.top + 4; primary = -dy; cross = Math.abs(dx); }
+        if (!ok || primary <= 0) continue;
+        const score = primary + cross * 2.5;          // prioriza alinhamento na direção
+        if (score < bestScore) { bestScore = score; best = el; }
+    }
+    if (best) { best.focus(); best.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return true; }
+    return false;
+}
+
 function App() {
     const [saved, setSaved] = useState<SavedConfig | null>(loadSaved());
     const [engine, setEngine] = useState<NexoEngine | null>(null);
@@ -101,28 +134,29 @@ function App() {
         setPicker({ title: meta.name, options: streams.map((s: any) => ({ label: String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || meta.name, url: s.url })) });
     }, [engine]);
 
-    // D-pad p/ as fileiras de filmes/séries (canais tem navegação própria).
-    const onKey = useCallback((e: React.KeyboardEvent) => {
-        const k = e.key;
-        if (!k.startsWith('Arrow')) return;
-        const root = homeRef.current; if (!root) return;
-        const rowsEls = Array.from(root.querySelectorAll('.tiles')) as HTMLElement[];
-        if (!rowsEls.length) return;
-        const active = document.activeElement as HTMLElement;
-        const focusIn = (row: HTMLElement, idx: number) => { const t = Array.from(row.querySelectorAll('.tile')) as HTMLElement[]; t[Math.max(0, Math.min(idx, t.length - 1))]?.focus(); };
-        const ri = rowsEls.findIndex(r => r.contains(active));
-        e.preventDefault();
-        if (ri < 0) { focusIn(rowsEls[0], 0); }
-        else {
-            const tiles = Array.from(rowsEls[ri].querySelectorAll('.tile')) as HTMLElement[];
-            const ci = tiles.indexOf(active);
-            if (k === 'ArrowRight') tiles[Math.min(ci + 1, tiles.length - 1)]?.focus();
-            else if (k === 'ArrowLeft') tiles[Math.max(ci - 1, 0)]?.focus();
-            else if (k === 'ArrowDown') { if (rowsEls[ri + 1]) focusIn(rowsEls[ri + 1], ci); }
-            else if (k === 'ArrowUp') { if (rowsEls[ri - 1]) focusIn(rowsEls[ri - 1], ci); }
-        }
-        setTimeout(() => (document.activeElement as HTMLElement)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }), 0);
+    // D-pad GLOBAL (controle de TV): setas movem o foco pelo elemento mais próximo.
+    // Exceções: inputs (texto) e o stage de Canais/Jogos (.chan-live tem zapping ↑↓).
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (!e.key.startsWith('Arrow')) return;
+            const a = document.activeElement as HTMLElement | null;
+            if (a && (a.tagName === 'INPUT' || a.closest('.chan-live'))) return;
+            if (spatialMove(e.key)) e.preventDefault();
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
+
+    // Foco inicial ao entrar numa seção (ponto de partida pro D-pad).
+    useEffect(() => {
+        if (section === 'pick' || section === 'channels') return;
+        const t = setTimeout(() => {
+            const a = document.activeElement as HTMLElement | null;
+            if (a && a !== document.body && a.closest('.home')) return; // já há foco no conteúdo
+            (document.querySelector('.home .vod-cat, .home .game-card, .home .tile') as HTMLElement | null)?.focus();
+        }, 220);
+        return () => clearTimeout(t);
+    }, [section]);
 
     // Liga a engine assim que há config salva.
     useEffect(() => {
@@ -225,7 +259,7 @@ function App() {
     const cwAll = cw.filter((m: any) => m.type === 'movie' || m.type === 'series');
 
     return (
-        <div className={`home ${section}`} ref={homeRef} onKeyDown={section === 'channels' ? undefined : onKey}>
+        <div className={`home ${section}`} ref={homeRef}>
             <header className="topbar">
                 <button className="brand-sm" onClick={() => setSection('pick')}>RAJADA</button>
                 <nav className="tabs-top">
@@ -281,6 +315,7 @@ function App() {
 /** Tela inicial estilo Netflix: pirâmide invertida (2 billboards em cima + 1
  *  embaixo), cada um com BACKDROP real, gradiente forte e tipografia premium. */
 function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { vod?: string; tv?: string; live?: string } }) {
+    useEffect(() => { const t = setTimeout(() => (document.querySelector('.pick-card') as HTMLElement | null)?.focus(), 150); return () => clearTimeout(t); }, []);
     const Card = (sec: Section, cls: string, bg: string | undefined, label: string, sub: string, ao: boolean) => (
         <button className={`pick-card ${cls}`} onClick={() => onPick(sec)} style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
             <div className="pc-grad" />
