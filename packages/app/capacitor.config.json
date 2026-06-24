@@ -1,5 +1,12 @@
 {
   "appId": "com.rajada.app",
   "appName": "Rajada",
-  "webDir": "dist"
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
 }
