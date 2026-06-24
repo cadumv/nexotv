@@ -2,7 +2,7 @@
 // Serve o dist/ num http://127.0.0.1:<porta> local (mesma situação do localhost que
 // já toca vídeo) e abre numa janela Chromium com webSecurity desligado, pra liberar
 // o fetch HTTP do provedor (sem CORS, sem mixed-content).
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, session } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -15,6 +15,10 @@ const MIME = {
   '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
   '.map': 'application/json',
 };
+
+// Porta FIXA: o localStorage (login, favoritos, "continuar assistindo") é isolado
+// por origem (inclui a porta). Porta aleatória = perde o login a cada abertura.
+const PORT = 41789;
 
 function startServer() {
   return new Promise((resolve, reject) => {
@@ -34,7 +38,7 @@ function startServer() {
       }
     });
     server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+    server.listen(PORT, '127.0.0.1', () => resolve(PORT));
   });
 }
 
@@ -43,6 +47,8 @@ app.commandLine.appendSwitch('disable-features', 'OutOfBlinkCors,BlockInsecurePr
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 async function createWindow() {
+  // App próprio: libera permissões (microfone p/ busca por voz, mídia, etc.).
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, cb) => cb(true));
   const port = await startServer();
   const win = new BrowserWindow({
     width: 1366,
@@ -61,6 +67,15 @@ async function createWindow() {
   win.loadURL(`http://127.0.0.1:${port}/`);
 }
 
-app.whenReady().then(createWindow);
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-app.on('window-all-closed', () => app.quit());
+// Instância única: 2ª abertura foca a janela existente (e não colide na porta fixa).
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    const w = BrowserWindow.getAllWindows()[0];
+    if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+  });
+  app.whenReady().then(createWindow);
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('window-all-closed', () => app.quit());
+}

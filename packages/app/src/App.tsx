@@ -1048,6 +1048,28 @@ function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel,
     const [loading, setLoading] = useState(false);
     const timer = useRef<any>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const recRef = useRef<any>(null);
+    const [listening, setListening] = useState(false);
+    // Busca por voz (Web Speech API) — ótimo na TV/controle. Some o botão se a
+    // plataforma não suportar reconhecimento de fala.
+    const voiceOK = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+    const startVoice = () => {
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SR) return;
+        try {
+            if (recRef.current) { try { recRef.current.stop(); } catch { } recRef.current = null; setListening(false); return; }
+            const rec = new SR();
+            rec.lang = 'pt-BR'; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+            rec.onresult = (e: any) => {
+                const txt = Array.from(e.results).map((r: any) => r[0]?.transcript || '').join('').trim();
+                if (txt) setQ(txt);
+            };
+            rec.onerror = () => { setListening(false); recRef.current = null; };
+            rec.onend = () => { setListening(false); recRef.current = null; };
+            recRef.current = rec; setListening(true); rec.start();
+        } catch { setListening(false); recRef.current = null; }
+    };
+    useEffect(() => () => { try { recRef.current?.stop(); } catch { } }, []);
     useEffect(() => { inputRef.current?.focus(); }, []);
     useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
     useEffect(() => {
@@ -1093,6 +1115,8 @@ function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel,
             <div className="search-bar">
                 <span className="search-ico">🔍</span>
                 <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar filmes, séries e canais…" />
+                {voiceOK && <button className={`search-mic${listening ? ' on' : ''}`} onClick={startVoice}
+                    aria-label="Buscar por voz" title="Buscar por voz">🎤</button>}
                 <button className="search-close" onClick={onClose}>✕</button>
             </div>
             <div className="search-results">
