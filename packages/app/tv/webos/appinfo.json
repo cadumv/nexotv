@@ -1,0 +1,16 @@
+{
+  "id": "com.rajada.app",
+  "version": "0.1.0",
+  "vendor": "Rajada",
+  "type": "web",
+  "main": "index.html",
+  "title": "Rajada",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#0b0b0f",
+  "iconColor": "#e50914",
+  "disableBackHistoryAPI": true,
+  "supportPortraitMode": false,
+  "handlesRelaunch": true,
+  "requiredPermissions": ["wifi.read", "internal.media", "time.query"]
+}

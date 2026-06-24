@@ -51,3 +51,7 @@ docs/
 # QA visual (credenciais + prints locais)
 qa/rajada.config.json
 qa/out/
+
+# TV packaging output
+packages/app/tv/build/
+packages/app/dist-electron/

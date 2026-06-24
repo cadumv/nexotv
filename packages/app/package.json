@@ -16,7 +16,11 @@
     "apk": "vite build && cap sync android && cd android && .\\gradlew.bat assembleDebug",
     "apk:install": "\"C:/Users/caduv/asdk/platform-tools/adb.exe\" install -r android/app/build/outputs/apk/debug/app-debug.apk",
     "desktop": "vite build && node electron/launch.cjs",
-    "desktop:build": "vite build && electron-builder --win --x64"
+    "desktop:build": "vite build && electron-builder --win --x64",
+    "tv:stage:tizen": "vite build && node tv/stage.mjs tizen",
+    "tv:stage:webos": "vite build && node tv/stage.mjs webos",
+    "pack:tizen": "vite build && node tv/stage.mjs tizen && tizen build-web -- tv/build/tizen && tizen package -t wgt -s rajada -- tv/build/tizen/.buildResult",
+    "pack:webos": "vite build && node tv/stage.mjs webos && ares-package tv/build/webos -o tv/build"
   },
   "build": {
     "appId": "com.rajada.desktop",
