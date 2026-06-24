@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import Hls from 'hls.js';
+import { attachAdaptive } from './player';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine, tmdbPoster } from './engineHost';
 
@@ -884,16 +884,10 @@ function LivePlayer({ sources, title }: { sources: string[]; title: string }) {
     useEffect(() => {
         const v = ref.current; if (!v || !url) return;
         let cancelled = false;
-        const next = () => { if (cancelled) return; if (i < sources.length - 1) setI(i + 1); else setDead(true); };
-        const isHls = /\.m3u8(\?|$)|\.ts(\?|$)/i.test(url) || url.includes('/live/');
-        let hls: Hls | null = null;
-        if (isHls && Hls.isSupported()) {
-            hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-            hls.loadSource(url); hls.attachMedia(v);
-            hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) next(); });
-        } else { v.src = url; v.addEventListener('error', next, { once: true }); }
-        const p = v.play(); if (p && p.catch) p.catch(() => { });
-        return () => { cancelled = true; try { hls?.destroy(); } catch { } };
+        // Esgotou todas as engines desta fonte → tenta a próxima fonte; se acabou, morre.
+        const onFatal = () => { if (cancelled) return; if (i < sources.length - 1) setI(i + 1); else setDead(true); };
+        const handle = attachAdaptive(v, url, onFatal);
+        return () => { cancelled = true; handle.destroy(); };
     }, [url, i, sources]);
     const trying = i > 0 && !dead;
     return (
@@ -912,17 +906,9 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const [err, setErr] = useState(false);
     useEffect(() => {
         const v = ref.current; if (!v) return;
-        const isHls = /\.m3u8(\?|$)|\.ts(\?|$)/i.test(url) || url.includes('/live/');
-        let hls: Hls | null = null;
-        if (isHls && Hls.isSupported()) {
-            hls = new Hls({ enableWorker: true, lowLatencyMode: false });
-            hls.loadSource(url);
-            hls.attachMedia(v);
-            hls.on(Hls.Events.ERROR, (_e, data) => { if (data.fatal) setErr(true); });
-        } else {
-            v.src = url; // mp4 / Safari-HLS nativo
-            v.addEventListener('error', () => setErr(true), { once: true });
-        }
+        // Player adaptativo: nativo → hls.js conforme a plataforma; só marca erro
+        // quando todas as engines falham.
+        const handle = attachAdaptive(v, url, () => setErr(true));
         // Retoma de onde parou (VOD).
         if (resumeFrom && resumeFrom > 5) {
             const seek = () => { try { if (v.currentTime < 1) v.currentTime = resumeFrom; } catch { } };
@@ -932,8 +918,7 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
         let last = 0;
         const onTime = () => { if (!contentKey) return; const now = v.currentTime; if (Math.abs(now - last) >= 5) { last = now; saveProg(contentKey, now, v.duration); } };
         v.addEventListener('timeupdate', onTime);
-        const p = v.play(); if (p && p.catch) p.catch(() => { });
-        return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); try { hls?.destroy(); } catch { } };
+        return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); handle.destroy(); };
     }, [url]);
     return (
         <div className="player" onClick={onClose}>
