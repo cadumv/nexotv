@@ -665,7 +665,7 @@ export class NexoEngine {
             for (const sofaName of ag.channels) for (const c of this._matchSofaToIptv(sofaName, baseList)) chMap.set(c.id, c);
             if (!chMap.size) continue;
             const channels = [...chMap.values()].sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a)).slice(0, 15);
-            out.push({ title: `${this._translateTeam(ag.home)} x ${this._translateTeam(ag.away)}`, start: ag.startMs, stop: ag.stopMs, channels });
+            out.push({ title: `${this._translateTeam(ag.home)} x ${this._translateTeam(ag.away)}`, start: ag.startMs, stop: ag.stopMs, channels, tournament: ag.tournament || '' });
         }
         return out;
     }
@@ -754,6 +754,8 @@ export class NexoEngine {
             poster: img, background: img, posterShape: 'landscape',
             description: `${when} - ${opts}`, releaseInfo: `${when} - ${opts}`,
             genres: [stripAccents(primary.name || '')].filter(Boolean),
+            // extras p/ a tela de Jogos (agrupar por competição, separar ao vivo):
+            tournament: stripAccents(g.tournament || ''), live, startMs: g.start,
         };
     }
 

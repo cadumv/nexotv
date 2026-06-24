@@ -51,7 +51,7 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
 }
 
 interface Row { id: string; type: string; name: string; metas: any[]; }
-type Section = 'pick' | 'vod' | 'channels';
+type Section = 'pick' | 'vod' | 'channels' | 'games';
 // Lista plana de canais com divisores: 'header' marca o início de uma categoria,
 // 'chan' é um canal. Permite zapear ↑↓ atravessando categorias (com divisor visível).
 interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?: any; }
@@ -68,12 +68,14 @@ function App() {
     const [chanFlat, setChanFlat] = useState<FlatItem[]>([]);
     const [catFirst, setCatFirst] = useState<Record<string, number>>({});
     const [chanLoading, setChanLoading] = useState(false);
-    const [pickArt, setPickArt] = useState<{ vod?: string; live?: string }>({});
+    const [gamesMetas, setGamesMetas] = useState<any[]>([]);
+    const [gamesLoading, setGamesLoading] = useState(false);
+    const [pickArt, setPickArt] = useState<{ vod?: string; tv?: string; live?: string }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
     const homeRef = useRef<HTMLDivElement>(null);
-    const builtRef = useRef({ vod: false, channels: false });
+    const builtRef = useRef({ vod: false, channels: false, games: false });
 
     const recordCw = (meta: any) => {
         setCw(prev => {
@@ -154,9 +156,8 @@ function App() {
     const buildChannels = useCallback(async (eng: NexoEngine) => {
         setChanLoading(true);
         const cats: any[] = eng.getManifest().catalogs;
-        const pick = (id: string) => cats.find((c: any) => c.id === id);
-        // "Jogos do Dia" como 1ª categoria (estilo TV), depois as categorias de canais.
-        const defs = [pick('nexotv_games'), ...cats.filter((c: any) => c.id.startsWith('iptv_channels_g_'))].filter(Boolean);
+        // Só categorias de canais (os jogos têm seção própria agora).
+        const defs = cats.filter((c: any) => c.id.startsWith('iptv_channels_g_'));
         const results = await Promise.all(defs.map(async (c: any) => {
             try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return { c, metas }; } catch { return { c, metas: [] as any[] }; }
         }));
@@ -171,12 +172,20 @@ function App() {
         setChanFlat(flat); setCatFirst(first); setChanCats(cm); setChanLoading(false);
     }, []);
 
+    const buildGames = useCallback(async (eng: NexoEngine) => {
+        setGamesLoading(true);
+        try { const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' }); setGamesMetas(metas || []); }
+        catch { setGamesMetas([]); }
+        setGamesLoading(false);
+    }, []);
+
     // Constrói a seção ao entrar nela (uma vez).
     useEffect(() => {
         if (!engine || !saved) return;
         if (section === 'vod' && !builtRef.current.vod) { builtRef.current.vod = true; buildVod(engine, saved.options); }
         if (section === 'channels' && !builtRef.current.channels) { builtRef.current.channels = true; buildChannels(engine); }
-    }, [section, engine, saved, buildVod, buildChannels]);
+        if (section === 'games' && !builtRef.current.games) { builtRef.current.games = true; buildGames(engine); }
+    }, [section, engine, saved, buildVod, buildChannels, buildGames]);
 
     // Arte cinematográfica dos cards (estilo Netflix): backdrop real de um filme da
     // biblioteca + foto de futebol (TMDB). Em 2º plano — cards mostram o gradiente até lá.
@@ -197,13 +206,14 @@ function App() {
                     }
                 }
             } catch { /* fallback gradiente */ }
+            const tv = (await tmdbBackdrop('telejornal').catch(() => null)) || (await tmdbBackdrop('television studio').catch(() => null)) || undefined;
             const live = (await tmdbBackdrop('futebol').catch(() => null)) || (await tmdbBackdrop('soccer stadium').catch(() => null)) || undefined;
-            if (!dead) setPickArt({ vod, live });
+            if (!dead) setPickArt({ vod, tv, live });
         })();
         return () => { dead = true; };
     }, [engine]);
 
-    const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false }; };
+    const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false, games: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
     if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} art={pickArt} />;
@@ -216,7 +226,8 @@ function App() {
                 <button className="brand-sm" onClick={() => setSection('pick')}>RAJADA</button>
                 <nav className="tabs-top">
                     <button className={section === 'vod' ? 'on' : ''} onClick={() => setSection('vod')}>Filmes e Séries</button>
-                    <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais ao vivo</button>
+                    <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
+                    <button className={section === 'games' ? 'on' : ''} onClick={() => setSection('games')}>Jogos ao vivo</button>
                 </nav>
                 <button className="logout" onClick={logout}>sair</button>
             </header>
@@ -247,6 +258,7 @@ function App() {
                 )
             )}
             {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} catFirst={catFirst} loading={chanLoading} />}
+            {section === 'games' && <GamesView metas={gamesMetas} loading={gamesLoading} onOpen={openItem} />}
 
             {picker && (
                 <div className="modal" onClick={() => setPicker(null)}>
@@ -266,32 +278,61 @@ function App() {
     );
 }
 
-/** Tela inicial estilo Netflix: 2 billboards landscape com BACKDROP real (foto
- *  cinematográfica), gradiente forte e tipografia premium. Fallback: gradiente. */
-function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { vod?: string; live?: string } }) {
+/** Tela inicial estilo Netflix: pirâmide invertida (2 billboards em cima + 1
+ *  embaixo), cada um com BACKDROP real, gradiente forte e tipografia premium. */
+function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { vod?: string; tv?: string; live?: string } }) {
+    const Card = (sec: Section, cls: string, bg: string | undefined, label: string, sub: string, ao: boolean) => (
+        <button className={`pick-card ${cls}`} onClick={() => onPick(sec)} style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
+            <div className="pc-grad" />
+            {ao && <span className="pc-live">● AO VIVO</span>}
+            <span className="pc-play">▶</span>
+            <div className="pc-foot"><span className="pc-label">{label}</span><span className="pc-sub2">{sub}</span></div>
+        </button>
+    );
     return (
         <div className="pick">
             <header className="pick-top"><span className="brand-sm">RAJADA</span><button className="logout" onClick={onLogout}>sair</button></header>
             <div className="pick-body">
                 <h2 className="pick-sub">O que você quer assistir?</h2>
                 <div className="pick-cards">
-                    <button className={`pick-card pc-vod${art.vod ? ' has-art' : ''}`} onClick={() => onPick('vod')}
-                        style={art.vod ? { backgroundImage: `url("${art.vod}")` } : undefined}>
-                        <div className="pc-grad" />
-                        <span className="pc-play">▶</span>
-                        <div className="pc-foot"><span className="pc-label">Filmes e Séries</span><span className="pc-sub2">Catálogo completo</span></div>
-                    </button>
-                    <button className={`pick-card pc-channels${art.live ? ' has-art' : ''}`} onClick={() => onPick('channels')}
-                        style={art.live ? { backgroundImage: `url("${art.live}")` } : undefined}>
-                        <div className="pc-grad" />
-                        <span className="pc-live">● AO VIVO</span>
-                        <span className="pc-play">▶</span>
-                        <div className="pc-foot"><span className="pc-label">Canais ao vivo</span><span className="pc-sub2">Jogos e TV agora</span></div>
-                    </button>
+                    {Card('vod', 'pc-vod', art.vod, 'Filmes e Séries', 'Catálogo completo', false)}
+                    {Card('channels', 'pc-channels', art.tv, 'Canais', 'TV agora', false)}
+                </div>
+                <div className="pick-cards pick-row2">
+                    {Card('games', 'pc-games', art.live, 'Jogos ao vivo', 'Acontecendo e próximos', true)}
                 </div>
                 {status && <div className="status">{status}</div>}
             </div>
         </div>
+    );
+}
+
+/** Jogos ao vivo: fileiras por competição (Copa América, Copa do Mundo…), com
+ *  "Ao vivo agora" no topo. Catálogo personalizado da agenda + EPG. */
+function GamesView({ metas, loading, onOpen }: { metas: any[]; loading: boolean; onOpen: (m: any) => void }) {
+    if (loading && !metas.length) return <div className="status">Carregando jogos…</div>;
+    if (!loading && !metas.length) return <div className="status">Nenhum jogo encontrado agora. Confira mais tarde.</div>;
+    const live = metas.filter(m => m.live);
+    const rest = metas.filter(m => !m.live);
+    const groups = new Map<string, any[]>();
+    for (const m of rest) { const k = (m.tournament || '').trim() || 'Outros jogos'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(m); }
+    const ordered = [...groups.entries()].sort((a, b) => {
+        if (a[0] === 'Outros jogos') return 1; if (b[0] === 'Outros jogos') return -1;
+        return (a[1][0]?.startMs || 0) - (b[1][0]?.startMs || 0);
+    });
+    return (
+        <>
+            {live.length > 0 && (
+                <section className="row"><h2>🔴 Ao vivo agora</h2>
+                    <div className="tiles">{live.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+                </section>
+            )}
+            {ordered.map(([name, list]) => (
+                <section className="row" key={name}><h2>{name}</h2>
+                    <div className="tiles">{list.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+                </section>
+            ))}
+        </>
     );
 }
 

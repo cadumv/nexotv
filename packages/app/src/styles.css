@@ -23,7 +23,9 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .pick-card:hover, .pick-card:focus { transform: translateY(-8px) scale(1.03); box-shadow: 0 30px 80px rgba(0,0,0,.85); outline-color: #fff; }
 /* gradiente base (enquanto o backdrop não chega) */
 .pc-vod { background-color: #2a0a0c; background-image: radial-gradient(120% 120% at 70% 0%, #7a1418 0%, #2a0a0c 60%, #120506 100%); }
-.pc-channels { background-color: #06241f; background-image: radial-gradient(120% 120% at 70% 0%, #0e5b4e 0%, #06241f 60%, #03130f 100%); }
+.pc-channels { background-color: #0a1430; background-image: radial-gradient(120% 120% at 70% 0%, #1c3a8a 0%, #0a1430 60%, #050a1c 100%); }
+.pc-games { background-color: #06241f; background-image: radial-gradient(120% 120% at 70% 0%, #0e5b4e 0%, #06241f 60%, #03130f 100%); }
+.pick-row2 { margin-top: -2px; }
 /* overlay cinematográfico sobre o backdrop (legibilidade do título) */
 .pc-grad { position: absolute; inset: 0; pointer-events: none;
     background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.45) 38%, rgba(0,0,0,.05) 62%, transparent 100%),
