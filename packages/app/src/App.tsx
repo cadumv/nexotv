@@ -4,6 +4,11 @@ import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine } from './engineHost';
 
 const LS_KEY = 'rajada.config.v1';
+// Liga a detecção de fundo do logo (cover vs contain) via canvas. Exige logos
+// servidos CORS-limpos (proxy próprio) — o wsrv público não garante CORS sob carga
+// e quebra a imagem. Ative (VITE_LOGO_CORS=1) só quando os logos passarem por um
+// proxy confiável (ex: Cloudflare Worker /img).
+const LOGO_CORS = (import.meta as any).env?.VITE_LOGO_CORS === '1';
 
 interface SavedConfig { config: AddonConfig; options: EngineOptions; }
 
@@ -292,15 +297,36 @@ function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
         ? meta.posterChain
         : [meta.poster || cardFor(meta.name)];
     const [idx, setIdx] = useState(0);
+    const [fill, setFill] = useState(false); // logo com fundo opaco → preenche o tile (vira card limpo)
     const card = cardFor(meta.name);
     const src = chain[Math.min(idx, chain.length - 1)] || card;
+    const isLogo = src.includes('wsrv.nl');
     const onErr = (e: React.SyntheticEvent<HTMLImageElement>) => {
         if (idx < chain.length - 1) setIdx(idx + 1);
         else if (e.currentTarget.src !== card) e.currentTarget.src = card;
     };
+    // Detecção de fundo embutido (cover vs contain) via canvas. Só roda se a imagem
+    // exibida for CORS-limpa (proxy próprio); senão o getImageData lança e fica
+    // contain (sem requisição extra — não sobrecarrega o wsrv).
+    const onLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+        if (shape !== 'square' || !isLogo) return;
+        const img = e.currentTarget;
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (!w || !h) return;
+        try {
+            const c = document.createElement('canvas'); c.width = w; c.height = h;
+            const ctx = c.getContext('2d', { willReadFrequently: true } as any); if (!ctx) return;
+            ctx.drawImage(img, 0, 0);
+            const pts = [[1, 1], [w - 2, 1], [1, h - 2], [w - 2, h - 2], [w >> 1, 1], [1, h >> 1]];
+            let opaque = 0, transp = 0;
+            for (const [x, y] of pts) { const a = ctx.getImageData(x, y, 1, 1).data[3]; if (a > 240) opaque++; else if (a < 24) transp++; }
+            if (transp === 0 && opaque >= pts.length - 1) setFill(true);
+        } catch { /* tainted (sem CORS) → mantém contain */ }
+    };
     return (
-        <button className={`tile ${shape}`} onClick={onPlay} aria-label={meta.name}>
-            <img src={src} alt={meta.name} loading="lazy" onError={onErr} />
+        <button className={`tile ${shape}${fill ? ' fill' : ''}`} onClick={onPlay} aria-label={meta.name}>
+            <img src={src} alt={meta.name} loading="lazy" crossOrigin={LOGO_CORS && isLogo ? 'anonymous' : undefined}
+                onError={onErr} onLoad={onLoad} />
             <span className="tile-name">{meta.name}</span>
         </button>
     );

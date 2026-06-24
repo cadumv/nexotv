@@ -325,7 +325,9 @@ export class NexoEngine {
     private _wsrv(url: string): string {
         let u = url;
         if (u.includes('imgur.com')) u = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(u)}`;
-        return `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=320&h=320&fit=contain&we&trim=10&bg=15151b`;
+        // SEM bg/achatar: preserva a transparência (o cliente detecta fundo opaco vs
+        // transparente p/ escolher cover vs contain). trim corta bordas uniformes.
+        return `https://wsrv.nl/?url=${encodeURIComponent(u)}&w=320&trim=10`;
     }
     private _logoCardUrl(item: any): string {
         const base = this._channelBaseName(item.name) || item.name || 'TV';
