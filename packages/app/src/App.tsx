@@ -758,7 +758,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
         if (now && it?.kind === 'chan' && it.meta.id === curIdRef.current) { stageRef.current?.focus(); return; }
         setIdx(i);
         clearTimeout(timer.current);
-        timer.current = setTimeout(() => loadStream(i), now ? 0 : 380);  // debounce no zapping
+        timer.current = setTimeout(() => loadStream(i), now ? 0 : 200);  // debounce no zapping
         // Mantém o foco no stage (não na linha) → ↑↓ zapeia e → vai pro player.
         setTimeout(() => { scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }); stageRef.current?.focus(); }, 0);
     }, [loadStream, vflat]);
@@ -911,6 +911,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     const recoverRef = useRef(0);
     const [alt, setAlt] = useState(0);        // fonte em uso (p/ aviso "tentando alternativa")
     const [dead, setDead] = useState(false);  // todas as fontes falharam
+    const [loading, setLoading] = useState(false); // bufferizando (feedback ao zapear)
     const [fs, setFs] = useState(false);      // tela cheia (CSS — funciona em qualquer TV)
     srcRef.current = sources;
 
@@ -919,14 +920,15 @@ function LivePlayer({ sources, title, options, onPick }: {
     const playAt = useCallback((i: number) => {
         const v = ref.current; const url = srcRef.current[i];
         if (!v || !url) return;
-        idxRef.current = i; setAlt(i);
+        idxRef.current = i; setAlt(i); setLoading(true);
         const nextSrc = () => { const ni = idxRef.current + 1; if (ni < srcRef.current.length) { recoverRef.current = 0; playAt(ni); } else setDead(true); };
         if (Hls.isSupported()) {
             let hls = hlsRef.current;
             if (!hls) {
                 hls = new Hls({
                     enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
-                    backBufferLength: 30, maxBufferLength: 30, maxMaxBufferLength: 60,
+                    // Começa perto da borda ao vivo (menos segmentos pra bufferizar = zap rápido).
+                    liveSyncDurationCount: 2, maxBufferLength: 12, maxMaxBufferLength: 40, backBufferLength: 15,
                     manifestLoadingTimeOut: 8000, fragLoadingTimeOut: 20000,
                     manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6,
                 });
@@ -965,6 +967,16 @@ function LivePlayer({ sources, title, options, onPick }: {
             else { stuck = 0; last = v.currentTime; }
         }, 1000);
         return () => clearInterval(iv);
+    }, []);
+
+    // Feedback de "carregando": some quando o vídeo realmente começa.
+    useEffect(() => {
+        const v = ref.current; if (!v) return;
+        const done = () => setLoading(false);
+        const wait = () => setLoading(true);
+        v.addEventListener('playing', done); v.addEventListener('canplay', done);
+        v.addEventListener('waiting', wait);
+        return () => { v.removeEventListener('playing', done); v.removeEventListener('canplay', done); v.removeEventListener('waiting', wait); };
     }, []);
 
     // Destrói a instância ao desmontar.
@@ -1008,6 +1020,7 @@ function LivePlayer({ sources, title, options, onPick }: {
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
             {canFs && !fs && <span className="live-hint">⛶ OK = tela cheia</span>}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
+            {loading && !dead && !!sources.length && <div className="live-loading"><span className="spin" /></div>}
             {trying && <div className="live-fallback">Fonte instável — tentando alternativa {alt + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
             {fs && (
