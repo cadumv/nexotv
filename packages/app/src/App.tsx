@@ -372,6 +372,33 @@ function compEmoji(name: string): string {
     return '⚽';
 }
 
+// Marca do provedor a partir do título cru (ex.: "Globo Bahia Santa Cruz [FHD]"
+// → "Globo", "CAZE TV 1 [HD]" → "CazeTV", "Premiere 2" → "Premiere"). Agrupa
+// variantes regionais e qualidades numa opção só, limpando a barra.
+const PROVIDER_BRANDS = ['Premiere', 'SporTV', 'Combate', 'Globoplay', 'Globo+', 'Globo', 'SBT', 'CazeTV', 'Caze', 'ESPN', 'DAZN', 'Disney+', 'Star+', 'Paramount+', 'TNT Sports', 'TNT', 'Record', 'Band', 'Amazon', 'Apple'];
+function providerBrand(title: string): string {
+    const s = String(title || '').replace(/\[[^\]]*\]/g, '').replace(/\s*-\s*Live$/i, '').trim();
+    const low = s.toLowerCase().replace(/\s+/g, '');
+    for (const b of PROVIDER_BRANDS) if (low.includes(b.toLowerCase().replace(/\s+/g, ''))) return b === 'Caze' ? 'CazeTV' : b;
+    return s.split(/\s+/)[0] || s || 'Opção';
+}
+function qualityRank(title: string): number {
+    const t = String(title || '');
+    if (/fhd|1080/i.test(t)) return 3; if (/\bhd\b|720/i.test(t)) return 2; if (/\bsd\b|480/i.test(t)) return 1; return 0;
+}
+// Agrupa streams por marca, mantendo a melhor qualidade de cada uma.
+function dedupStreams(streams: any[]): { label: string; url: string }[] {
+    const groups = new Map<string, { label: string; url: string; q: number }>();
+    for (const s of streams || []) {
+        const b = providerBrand(s.title || ''); const q = qualityRank(s.title || '');
+        const cur = groups.get(b);
+        if (!cur || q > cur.q) groups.set(b, { label: b, url: s.url, q });
+    }
+    return [...groups.values()].map(({ label, url }) => ({ label, url }));
+}
+// Rola o chip focado pra dentro da vista (D-pad na TV / Tab na web).
+const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ inline: 'center', block: 'nearest' });
+
 // Agrupa os jogos: ao vivo primeiro, depois por competição (ordenado por horário).
 function groupGames(metas: any[]): { live: any[]; ordered: [string, any[]][] } {
     const live = metas.filter(m => m.live);
@@ -512,15 +539,15 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
                 <LivePlayer url={url} title={title} />
                 <div className="chan-now">
                     <span className="now-title">{title || 'Selecione um jogo'}{note && <em className="now-note"> — {note}</em>}</span>
-                    {opts.length > 1 && (
+                    {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
                         <div className="now-opts">
-                            {opts.map((o, i) => (
-                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)}>
-                                    {String(o.title || '').replace(/\s*-\s*Live$/i, '').replace(/\[[^\]]*\]/g, '').trim() || ('Opção ' + (i + 1))}
+                            {ds.map((o, i) => (
+                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)} onFocus={focusScroll}>
+                                    {o.label}
                                 </button>
                             ))}
                         </div>
-                    )}
+                    ); })()}
                 </div>
             </main>
         </div>
@@ -665,15 +692,15 @@ function ChannelsView({ engine, cats, flat, loading }: {
                 <LivePlayer url={url} title={title} />
                 <div className="chan-now">
                     <span className="now-title">{title || 'Selecione um canal'}</span>
-                    {opts.length > 1 && (
+                    {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
                         <div className="now-opts">
-                            {opts.map((o, i) => (
-                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)}>
-                                    {String(o.title || '').replace(/\s*-\s*Live$/i, '').trim() || ('Opção ' + (i + 1))}
+                            {ds.map((o, i) => (
+                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)} onFocus={focusScroll}>
+                                    {o.label}
                                 </button>
                             ))}
                         </div>
-                    )}
+                    ); })()}
                 </div>
             </main>
         </div>
