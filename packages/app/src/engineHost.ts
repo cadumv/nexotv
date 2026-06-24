@@ -47,6 +47,13 @@ export async function tmdbBackdrop(query: string): Promise<string | null> {
 // URL do Worker /agenda (RapidAPI Sofascore) — build-time (.env.local, fora do
 // GitHub), pra os Jogos preencherem sem o usuário digitar.
 const DEFAULT_AGENDA = (import.meta as any).env?.VITE_AGENDA_URL || null;
+// No dev (vite serve) usamos caminho RELATIVO pra cair no proxy do vite (sem CORS).
+// No APK/preview usamos a URL completa (nativo não tem CORS).
+function resolveAgenda(full: string | null | undefined): string | null {
+    if (!full) return null;
+    if ((import.meta as any).env?.DEV) { try { const u = new URL(full); return u.pathname + u.search; } catch { return full; } }
+    return full;
+}
 
 /** Pôster cinematográfico (RETRATO 2:3) do TMDB por busca — pra cards de pôster. */
 export async function tmdbPoster(query: string): Promise<string | null> {
@@ -66,7 +73,7 @@ export async function createEngine(config: AddonConfig, options: EngineOptions):
     const opts: EngineOptions = {
         ...options,
         tmdbApiKey: options.tmdbApiKey || DEFAULT_TMDB,
-        sofascoreAgendaUrl: options.sofascoreAgendaUrl || DEFAULT_AGENDA,
+        sofascoreAgendaUrl: resolveAgenda(options.sofascoreAgendaUrl || DEFAULT_AGENDA),
         logoBank: options.logoBank || (logoBank as Record<string, string>),
         logoProxyBase: deriveLogoProxy(options),
     };
