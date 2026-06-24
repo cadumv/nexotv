@@ -258,7 +258,7 @@ function App() {
                 )
             )}
             {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />}
-            {section === 'games' && <GamesView metas={gamesMetas} loading={gamesLoading} onOpen={openItem} />}
+            {section === 'games' && engine && <GamesView engine={engine} metas={gamesMetas} loading={gamesLoading} />}
 
             {picker && (
                 <div className="modal" onClick={() => setPicker(null)}>
@@ -305,11 +305,75 @@ function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) =>
     );
 }
 
-/** Jogos ao vivo: fileiras por competição (Copa América, Copa do Mundo…), com
- *  "Ao vivo agora" no topo. Catálogo personalizado da agenda + EPG. */
-function GamesView({ metas, loading, onOpen }: { metas: any[]; loading: boolean; onOpen: (m: any) => void }) {
-    if (loading && !metas.length) return <div className="status">Carregando jogos…</div>;
-    if (!loading && !metas.length) return <div className="status">Nenhum jogo encontrado agora. Confira mais tarde.</div>;
+// --- Jogos: parsing + visual estilo Netflix --------------------------------
+// Extrai os dados de um jogo do meta (name="Home x Away", releaseInfo="QUANDO - canal").
+function parseGame(m: any): { home: string; away: string; comp: string; live: boolean; when: string; chans: string[] } {
+    const raw = (m.name || '').replace(/^\[AO VIVO\]\s*/i, '').trim();
+    const parts = raw.split(/\s+x\s+/i);
+    const home = (parts[0] || raw).trim();
+    const away = (parts[1] || '').trim();
+    const info = (m.releaseInfo || m.description || '').split('\n')[0];
+    const segs = info.split(' - ');
+    const when = (segs[0] || '').trim();
+    const tail = (segs.slice(1).join(' - ') || '').trim();
+    const clean = (s: string) => s.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+    const chans = (Array.isArray(m.genres) && m.genres.length ? m.genres.filter(Boolean)
+        : (tail && !/transmiss/i.test(tail) ? [tail] : [])).map(clean).filter(Boolean);
+    return { home, away, comp: (m.tournament || '').trim(), live: !!m.live, when, chans };
+}
+// Sigla de 3 letras a partir do nome do time (fallback de escudo).
+function teamSigla(name: string): string {
+    const words = (name || '').replace(/[^A-Za-zÀ-ÿ ]/g, '').split(/\s+/).filter(Boolean);
+    if (!words.length) return '?';
+    if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+    return words.slice(0, 3).map(w => w[0]).join('').toUpperCase();
+}
+// Cor determinística por time (gradiente do escudo) — variedade consistente.
+function teamColor(name: string): string {
+    let h = 0; for (let i = 0; i < (name || '').length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360} 62% 42%)`;
+}
+function Crest({ name }: { name: string }) {
+    const c = teamColor(name);
+    return <span className="g-crest" style={{ background: `linear-gradient(145deg, ${c}, rgba(0,0,0,.55))` }}>{teamSigla(name)}</span>;
+}
+function GameCard({ meta, onPlay, hero }: { meta: any; onPlay: () => void; hero?: boolean }) {
+    const g = parseGame(meta);
+    return (
+        <button className={'game-card' + (hero ? ' g-hero' : '') + (g.live ? ' live' : '')} onClick={onPlay} title={meta.name}>
+            <span className="g-top">
+                {g.comp && <span className="g-comp">{g.comp}</span>}
+                {g.live ? <span className="g-livepill"><i /> AO VIVO</span> : <span className="g-when">{g.when}</span>}
+            </span>
+            <span className="g-match">
+                <span className="g-team"><Crest name={g.home} /><b>{g.home}</b></span>
+                <span className="g-vs">VS</span>
+                <span className="g-team"><Crest name={g.away} /><b>{g.away || '—'}</b></span>
+            </span>
+            <span className="g-bottom">
+                {g.chans.length ? g.chans.slice(0, 3).map((c, i) => <span className="g-chan" key={i}>{c}</span>)
+                    : <span className="g-chan ghost">Transmissão</span>}
+                {hero && <span className="g-watch">{g.live ? '▶ Assistir agora' : '▶ Detalhes'}</span>}
+            </span>
+        </button>
+    );
+}
+// Emoji por competição (toque visual nos títulos das fileiras).
+function compEmoji(name: string): string {
+    const n = name.toLowerCase();
+    if (/copa do mundo|world cup/.test(n)) return '🏆';
+    if (/copa am[eé]rica/.test(n)) return '🌎';
+    if (/libertadores/.test(n)) return '🥇';
+    if (/sul-?americana/.test(n)) return '🏅';
+    if (/champions|liga dos campe/.test(n)) return '⭐';
+    if (/brasileir|série a|serie a/.test(n)) return '🇧🇷';
+    if (/premier|inglesa/.test(n)) return '🏴';
+    if (/espanhol|la liga/.test(n)) return '🇪🇸';
+    return '⚽';
+}
+
+// Agrupa os jogos: ao vivo primeiro, depois por competição (ordenado por horário).
+function groupGames(metas: any[]): { live: any[]; ordered: [string, any[]][] } {
     const live = metas.filter(m => m.live);
     const rest = metas.filter(m => !m.live);
     const groups = new Map<string, any[]>();
@@ -318,19 +382,148 @@ function GamesView({ metas, loading, onOpen }: { metas: any[]; loading: boolean;
         if (a[0] === 'Outros jogos') return 1; if (b[0] === 'Outros jogos') return -1;
         return (a[1][0]?.startMs || 0) - (b[1][0]?.startMs || 0);
     });
+    return { live, ordered };
+}
+
+/** Jogos ao vivo: grade (hero + fileiras por competição) → ao clicar, abre o
+ *  GameStage (player + lista lateral pra trocar de jogo), igual aos Canais. */
+function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[]; loading: boolean }) {
+    const [watch, setWatch] = useState<any | null>(null);
+    if (loading && !metas.length) return <div className="status">Carregando jogos…</div>;
+    if (!loading && !metas.length) return <div className="status">Nenhum jogo encontrado agora. Confira mais tarde.</div>;
+    if (watch) return <GameStage engine={engine} metas={metas} start={watch} onBack={() => setWatch(null)} />;
+    const { live, ordered } = groupGames(metas);
+    const featured = live[0] || metas[0];          // hero: ao vivo, senão o próximo
+    const liveRest = featured && featured.live ? live.slice(1) : live;
+    const grpFiltered = ordered.map(([n, l]) => [n, l.filter((m: any) => m !== featured)] as [string, any[]]).filter(([, l]) => l.length);
     return (
-        <>
-            {live.length > 0 && (
-                <section className="row"><h2>🔴 Ao vivo agora</h2>
-                    <div className="tiles">{live.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+        <div className="games">
+            {featured && (
+                <div className="games-hero">
+                    <GameCard meta={featured} onPlay={() => setWatch(featured)} hero />
+                </div>
+            )}
+            {liveRest.length > 0 && (
+                <section className="row"><h2><span className="dot-live" /> Ao vivo agora</h2>
+                    <div className="tiles">{liveRest.map((m: any) => <GameCard key={m.id} meta={m} onPlay={() => setWatch(m)} />)}</div>
                 </section>
             )}
-            {ordered.map(([name, list]) => (
-                <section className="row" key={name}><h2>{name}</h2>
-                    <div className="tiles">{list.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} />)}</div>
+            {grpFiltered.map(([name, list]) => (
+                <section className="row" key={name}><h2>{compEmoji(name)} {name}</h2>
+                    <div className="tiles">{list.map((m: any) => <GameCard key={m.id} meta={m} onPlay={() => setWatch(m)} />)}</div>
                 </section>
             ))}
-        </>
+        </div>
+    );
+}
+
+// Linha de jogo na lista lateral do GameStage (escudos + times + status).
+function GameRow({ meta }: { meta: any }) {
+    const g = parseGame(meta);
+    return (
+        <span className="gr-body">
+            <Crest name={g.home} />
+            <span className="gr-info">
+                <span className="gr-teams">{g.home} <i>×</i> {g.away || '—'}</span>
+                <span className="gr-meta">{g.live ? <em className="gr-live">● AO VIVO</em> : g.when}{g.comp ? ' · ' + g.comp : ''}</span>
+            </span>
+        </span>
+    );
+}
+
+/** Player de jogo + lista lateral pra trocar de jogo (zapping ↑↓) e de
+ *  transmissão (qualidade/canal). Mesmo layout dos Canais. */
+function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas: any[]; start: any; onBack: () => void }) {
+    const [idx, setIdx] = useState(-1);
+    const [url, setUrl] = useState('');
+    const [title, setTitle] = useState('');
+    const [opts, setOpts] = useState<any[]>([]);
+    const [note, setNote] = useState('');
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const stageRef = useRef<HTMLDivElement>(null);
+    const timer = useRef<any>(null);
+    const started = useRef(false);
+
+    // Lista plana com divisores (ao vivo + por competição) — espelha a dos canais.
+    const gflat = useMemo(() => {
+        const { live, ordered } = groupGames(metas);
+        const out: { kind: 'header' | 'game'; name: string; meta?: any; live?: boolean }[] = [];
+        if (live.length) { out.push({ kind: 'header', name: 'Ao vivo agora', live: true }); live.forEach(m => out.push({ kind: 'game', name: m.name, meta: m })); }
+        ordered.forEach(([name, list]) => { out.push({ kind: 'header', name }); list.forEach(m => out.push({ kind: 'game', name: m.name, meta: m })); });
+        return out;
+    }, [metas]);
+    const gameIdxs = useMemo(() => { const a: number[] = []; gflat.forEach((f, i) => { if (f.kind === 'game') a.push(i); }); return a; }, [gflat]);
+
+    const loadStream = useCallback(async (i: number) => {
+        const it = gflat[i]; if (!it || it.kind !== 'game') return;
+        const g = parseGame(it.meta);
+        setTitle(`${g.home} × ${g.away || ''}`.trim()); setNote('');
+        try {
+            const streams = await engine.getStreams(it.meta.id);
+            setOpts(streams); setUrl(streams[0]?.url || '');
+            if (!streams.length) setNote(g.live ? 'Transmissão indisponível no momento.' : `Começa ${g.when}.`);
+        } catch { setOpts([]); setUrl(''); setNote('Não foi possível carregar a transmissão.'); }
+    }, [engine, gflat]);
+
+    const select = useCallback((i: number, now = false) => {
+        setIdx(i);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => loadStream(i), now ? 0 : 380);
+        setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
+    }, [loadStream]);
+
+    // Entra já no jogo clicado.
+    useEffect(() => {
+        if (started.current || !gflat.length) return;
+        started.current = true;
+        const si = gflat.findIndex(f => f.kind === 'game' && f.meta === start);
+        select(si >= 0 ? si : (gameIdxs[0] ?? 0), true);
+    }, [gflat, gameIdxs, start, select]);
+
+    const move = (dir: 1 | -1) => {
+        const pos = gameIdxs.indexOf(idx);
+        const np = Math.max(0, Math.min(gameIdxs.length - 1, pos + dir));
+        select(gameIdxs[np]);
+    };
+    const onKey = (e: React.KeyboardEvent) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); onBack(); }
+    };
+
+    return (
+        <div className="chan-live" ref={stageRef} tabIndex={0} onKeyDown={onKey}>
+            <aside className="chan-list">
+                <div className="chan-list-head">
+                    <button className="back" onClick={onBack}>‹ Voltar</button>
+                    <span className="cur-cat">Jogos</span>
+                </div>
+                <div className="chan-scroll" ref={scrollRef}>
+                    {gflat.map((f, i) => f.kind === 'header' ? (
+                        <div className="chan-divider" key={'h' + i}><span>{f.live ? <><span className="dot-live" /> {f.name}</> : <>{compEmoji(f.name)} {f.name}</>}</span></div>
+                    ) : (
+                        <button key={i} data-i={i} className={`chan-row game-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
+                            <GameRow meta={f.meta} />
+                        </button>
+                    ))}
+                </div>
+            </aside>
+            <main className="chan-stage">
+                <LivePlayer url={url} title={title} />
+                <div className="chan-now">
+                    <span className="now-title">{title || 'Selecione um jogo'}{note && <em className="now-note"> — {note}</em>}</span>
+                    {opts.length > 1 && (
+                        <div className="now-opts">
+                            {opts.map((o, i) => (
+                                <button key={i} className={`now-opt${o.url === url ? ' on' : ''}`} onClick={() => setUrl(o.url)}>
+                                    {String(o.title || '').replace(/\s*-\s*Live$/i, '').replace(/\[[^\]]*\]/g, '').trim() || ('Opção ' + (i + 1))}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </main>
+        </div>
     );
 }
 

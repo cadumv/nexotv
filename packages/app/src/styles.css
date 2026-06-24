@@ -82,6 +82,19 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .chan-row.on { background: #e50914; color: #fff; }
 .chan-ico { width: 38px; height: 38px; flex: 0 0 auto; object-fit: contain; background: #15151b; border-radius: 6px; }
 .chan-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* linha de jogo na lista lateral */
+.game-row { padding: 8px 8px; }
+.gr-body { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; }
+.gr-body .g-crest { width: 34px; height: 34px; font-size: 11px; flex: 0 0 auto; }
+.gr-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gr-teams { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-teams i { color: #7b8398; font-style: normal; font-weight: 800; }
+.game-row.on .gr-teams i { color: rgba(255,255,255,.7); }
+.gr-meta { font-size: 11px; color: #8a8a93; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.game-row.on .gr-meta { color: rgba(255,255,255,.85); }
+.gr-live { color: #ff5b52; font-weight: 800; font-style: normal; }
+.game-row.on .gr-live { color: #fff; }
+.now-note { color: #8a8a93; font-weight: 600; font-size: 13px; font-style: normal; }
 .chan-stage { display: flex; flex-direction: column; min-width: 0; background: #000; }
 .live-player { position: relative; flex: 1; min-height: 0; background: #000; display: flex; align-items: center; justify-content: center; }
 .live-video { width: 100%; height: 100%; background: #000; object-fit: contain; }
@@ -143,3 +156,61 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .player-video { width: 100%; height: 100%; background: #000; object-fit: contain; }
 .player-err { position: absolute; bottom: 40px; left: 0; right: 0; text-align: center; color: #fff; }
 .player-err button { margin-left: 10px; background: #e50914; color: #fff; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
+
+/* ---- Jogos: cards desenhados (sem placeholder de texto) ---- */
+.games { padding-top: 8px; }
+.games .row h2 { display: flex; align-items: center; gap: 8px; }
+.dot-live { width: 11px; height: 11px; border-radius: 50%; background: #e50914; box-shadow: 0 0 0 0 rgba(229,9,20,.6); animation: pulse 1.6s infinite; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(229,9,20,.6); } 70% { box-shadow: 0 0 0 9px rgba(229,9,20,0); } 100% { box-shadow: 0 0 0 0 rgba(229,9,20,0); } }
+
+/* card base */
+.game-card {
+    flex: 0 0 auto; width: 326px; height: 184px; border: 0; cursor: pointer; position: relative;
+    border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; justify-content: space-between;
+    color: #fff; text-align: left; overflow: hidden; transition: transform .18s, box-shadow .18s;
+    background:
+        radial-gradient(130% 90% at 85% -10%, rgba(255,255,255,.10), transparent 55%),
+        linear-gradient(160deg, #1f2533 0%, #12141c 60%, #0d0f15 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), 0 8px 26px rgba(0,0,0,.45);
+}
+.game-card::before { content: ''; position: absolute; inset: 0; background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 64px); pointer-events: none; }
+.game-card.live { background:
+        radial-gradient(130% 90% at 85% -10%, rgba(255,90,80,.18), transparent 55%),
+        linear-gradient(160deg, #3a1416 0%, #1a0e12 60%, #120a0c 100%);
+    box-shadow: inset 0 0 0 1px rgba(229,9,20,.35), 0 8px 30px rgba(120,0,0,.4); }
+.game-card:hover, .game-card:focus { transform: scale(1.05); outline: none; box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 14px 40px rgba(0,0,0,.6); z-index: 3; }
+
+.g-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; }
+.g-comp { font-size: 10.5px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; color: #cdd3df;
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.12); padding: 4px 9px; border-radius: 999px;
+    max-width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-when { font-size: 11px; font-weight: 800; letter-spacing: .5px; color: #aeb6c4; text-transform: uppercase; }
+.g-livepill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 900; letter-spacing: .8px;
+    background: #e50914; color: #fff; padding: 4px 10px; border-radius: 999px; }
+.g-livepill i { width: 7px; height: 7px; border-radius: 50%; background: #fff; animation: pulse 1.6s infinite; }
+
+.g-match { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; }
+.g-team { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 1; min-width: 0; }
+.g-team b { font-size: 13px; font-weight: 700; line-height: 1.15; text-align: center; max-width: 100%;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.g-crest { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 900; letter-spacing: .5px; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5);
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,.18), 0 4px 12px rgba(0,0,0,.45); }
+.g-vs { font-size: 13px; font-weight: 900; color: #8189a0; flex: 0 0 auto; padding: 0 2px; }
+
+.g-bottom { display: flex; align-items: center; gap: 6px; position: relative; flex-wrap: wrap; }
+.g-chan { font-size: 10.5px; font-weight: 700; color: #dfe4ee; background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.10); padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+.g-chan.ghost { color: #8189a0; }
+.g-watch { margin-left: auto; font-size: 11.5px; font-weight: 800; color: #fff; }
+
+/* hero do jogo principal */
+.games-hero { padding: 18px 40px 4px; }
+.game-card.g-hero { width: min(720px, calc(100vw - 80px)); height: 230px; padding: 22px 28px; border-radius: 18px; }
+.game-card.g-hero .g-crest { width: 66px; height: 66px; font-size: 19px; }
+.game-card.g-hero .g-team b { font-size: 18px; }
+.game-card.g-hero .g-vs { font-size: 18px; }
+.game-card.g-hero .g-comp { font-size: 12px; }
+.game-card.g-hero .g-watch { background: #fff; color: #000; padding: 9px 20px; border-radius: 8px; font-size: 14px; }
+.game-card.g-hero:hover .g-watch, .game-card.g-hero:focus .g-watch { background: #e50914; color: #fff; }
