@@ -72,7 +72,8 @@ function App() {
     const [gamesLoading, setGamesLoading] = useState(false);
     const [pickArt, setPickArt] = useState<{ vod?: string; tv?: string; live?: string }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
-    const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
+    const [playing, setPlaying] = useState<{ url: string; title: string; key?: string; resumeFrom?: number } | null>(null);
+    const [details, setDetails] = useState<any | null>(null); // tela de detalhes (filme/série)
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
     const homeRef = useRef<HTMLDivElement>(null);
     const builtRef = useRef({ vod: false, channels: false, games: false });
@@ -85,7 +86,9 @@ function App() {
             return next;
         });
     };
-    const play = (url: string, title: string) => { setPicker(null); setPlaying({ url, title }); };
+    const play = (url: string, title: string, key?: string, resumeFrom?: number) => { setPicker(null); setPlaying({ url, title, key, resumeFrom }); };
+    // Abre a tela de detalhes (filme/série) e registra em "Continuar assistindo".
+    const openDetails = useCallback((meta: any) => { recordCw(meta); setDetails(meta); }, []);
 
     // Filmes/séries: abre seletor de opções se houver mais de uma (tela cheia).
     const openItem = useCallback(async (meta: any) => {
@@ -238,7 +241,7 @@ function App() {
             {section === 'vod' && engine && (
                 vodLoading && !movieRows.length && !seriesRows.length
                     ? <div className="connecting"><span className="spin" /> Carregando catálogo…</div>
-                    : <VodView engine={engine} movieRows={movieRows} seriesRows={seriesRows} cwAll={cwAll} onOpen={openItem} />
+                    : <VodView engine={engine} movieRows={movieRows} seriesRows={seriesRows} cwAll={cwAll} onOpen={openDetails} />
             )}
             {section === 'channels' && (engine
                 ? <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />
@@ -260,7 +263,8 @@ function App() {
                 </div>
             )}
 
-            {playing && <Player url={playing.url} title={playing.title} onClose={() => setPlaying(null)} />}
+            {details && engine && <DetailsView engine={engine} meta={details} onClose={() => setDetails(null)} onPlay={(u, t, k, r) => { setDetails(null); play(u, t, k, r); }} />}
+            {playing && <Player url={playing.url} title={playing.title} contentKey={playing.key} resumeFrom={playing.resumeFrom} onClose={() => setPlaying(null)} />}
         </div>
     );
 }
@@ -767,7 +771,7 @@ function LivePlayer({ sources, title }: { sources: string[]; title: string }) {
 }
 
 /** Player em tela cheia: HLS via hls.js; senão <video> nativo; fallback "abrir externo". */
-function Player({ url, title, onClose }: { url: string; title: string; onClose: () => void }) {
+function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; title: string; contentKey?: string; resumeFrom?: number; onClose: () => void }) {
     const ref = useRef<HTMLVideoElement>(null);
     const [err, setErr] = useState(false);
     useEffect(() => {
@@ -783,8 +787,17 @@ function Player({ url, title, onClose }: { url: string; title: string; onClose: 
             v.src = url; // mp4 / Safari-HLS nativo
             v.addEventListener('error', () => setErr(true), { once: true });
         }
+        // Retoma de onde parou (VOD).
+        if (resumeFrom && resumeFrom > 5) {
+            const seek = () => { try { if (v.currentTime < 1) v.currentTime = resumeFrom; } catch { } };
+            v.addEventListener('loadedmetadata', seek, { once: true });
+        }
+        // Salva o progresso periodicamente (continuar assistindo / retomar).
+        let last = 0;
+        const onTime = () => { if (!contentKey) return; const now = v.currentTime; if (Math.abs(now - last) >= 5) { last = now; saveProg(contentKey, now, v.duration); } };
+        v.addEventListener('timeupdate', onTime);
         const p = v.play(); if (p && p.catch) p.catch(() => { });
-        return () => { try { hls?.destroy(); } catch { } };
+        return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); try { hls?.destroy(); } catch { } };
     }, [url]);
     return (
         <div className="player" onClick={onClose}>
@@ -819,6 +832,123 @@ function cardFor(name: string) {
 }
 // Nota IMDb numérica (string "7.8" → 7.8) p/ ordenar destaques.
 function ratingNum(m: any): number { const r = parseFloat(m?.imdbRating); return isFinite(r) ? r : 0; }
+
+// --- Progresso de reprodução (continuar assistindo / retomar posição) ----------
+// Chave = id do conteúdo (filme `vod..._` ou episódio `epi..._`).
+const PROG_KEY = 'rajada.progress.v1';
+function loadProg(): Record<string, { pos: number; dur: number; t: number }> { try { return JSON.parse(localStorage.getItem(PROG_KEY) || '{}'); } catch { return {}; } }
+function getProg(key: string) { if (!key) return null; return loadProg()[key] || null; }
+function saveProg(key: string, pos: number, dur: number) {
+    if (!key || !dur || !isFinite(pos)) return;
+    try {
+        const p = loadProg();
+        if (pos / dur > 0.95 || pos < 8) delete p[key];          // quase no fim ou começo → não guarda
+        else p[key] = { pos, dur, t: Date.now() };
+        localStorage.setItem(PROG_KEY, JSON.stringify(p));
+    } catch { }
+}
+function fmtTime(s: number): string {
+    s = Math.max(0, Math.floor(s || 0));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+    return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(ss).padStart(2, '0')}`;
+}
+
+/** Tela de detalhes (overlay) de filme/série: backdrop, nota, sinopse, elenco.
+ *  Filme → Assistir (retoma posição). Série → temporadas + episódios. */
+function DetailsView({ engine, meta, onClose, onPlay }: {
+    engine: NexoEngine; meta: any; onClose: () => void;
+    onPlay: (url: string, title: string, key: string, resumeFrom: number) => void;
+}) {
+    const [d, setD] = useState<any>(meta);
+    const [loading, setLoading] = useState(true);
+    const [season, setSeason] = useState<number>(1);
+    useEffect(() => {
+        let dead = false; setLoading(true);
+        engine.getDetailedMeta(meta.id)
+            .then((r: any) => { if (!dead && r) { setD(r); const vs = Array.isArray(r.videos) ? r.videos : []; if (vs.length) setSeason(vs[0].season || 1); } })
+            .catch(() => { }).finally(() => { if (!dead) setLoading(false); });
+        return () => { dead = true; };
+    }, [meta.id]);
+    useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
+
+    const videos: any[] = Array.isArray(d.videos) ? d.videos : [];
+    const isSeries = videos.length > 0 || d.type === 'series' || (typeof meta.id === 'string' && /ser\w*_/.test(meta.id));
+    const seasons = [...new Set(videos.map(v => v.season))].sort((a, b) => a - b);
+    const eps = videos.filter(v => v.season === season).sort((a, b) => a.episode - b.episode);
+    const genres: string[] = Array.isArray(d.genres) ? d.genres : [];
+    const cast: string[] = Array.isArray(d.cast) ? d.cast : [];
+    const art = d.background && !/placehold/.test(d.background) ? d.background : '';
+    const poster = d.poster && !/placehold/.test(d.poster) ? d.poster : '';
+
+    const startMovie = async (from: number) => {
+        try { const s = await engine.getStreams(meta.id); if (s[0]?.url) onPlay(s[0].url, d.name, meta.id, from); } catch { }
+    };
+    const playEp = async (ep: any) => {
+        try { const s = await engine.getStreams(ep.id); if (s[0]?.url) onPlay(s[0].url, `${d.name} · S${ep.season}E${ep.episode}`, ep.id, getProg(ep.id)?.pos || 0); } catch { }
+    };
+    const mProg = !isSeries ? getProg(meta.id) : null;
+
+    return (
+        <div className="details" onClick={onClose}>
+            <div className="details-box" onClick={e => e.stopPropagation()}>
+                <div className="details-hero" style={art ? { backgroundImage: `url("${art}")` } : undefined}>
+                    <div className="details-grad" />
+                    <button className="details-close" onClick={onClose} aria-label="Fechar">✕</button>
+                    <div className="details-head">
+                        {!art && poster && <img className="details-poster" src={poster} alt="" />}
+                        <div className="details-info">
+                            <span className="vb-kind">{isSeries ? 'SÉRIE' : 'FILME'}</span>
+                            <h1 className="vb-title">{d.name}</h1>
+                            <div className="vb-meta">
+                                {ratingNum(d) > 0 && <span className="vb-imdb">★ {d.imdbRating}</span>}
+                                {d.releaseInfo && <span>{d.releaseInfo}</span>}
+                                {d.runtime && <span>{d.runtime} min</span>}
+                                {genres.length > 0 && <span className="vb-genres">{genres.slice(0, 3).join(' · ')}</span>}
+                            </div>
+                            {!isSeries && (
+                                <div className="details-actions">
+                                    <button className="vb-play" onClick={() => startMovie(mProg?.pos || 0)}>▶ {mProg ? `Continuar (${fmtTime(mProg.pos)})` : 'Assistir'}</button>
+                                    {mProg && <button className="details-restart" onClick={() => startMovie(0)}>Reiniciar</button>}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+                <div className="details-body">
+                    {d.description && <p className="details-desc">{d.description}</p>}
+                    {cast.length > 0 && <div className="vb-cast"><b>Elenco:</b> {cast.slice(0, 6).join(', ')}</div>}
+                    {d.director && <div className="vb-cast"><b>Direção:</b> {d.director}</div>}
+                    {loading && isSeries && <div className="status">Carregando episódios…</div>}
+                    {isSeries && seasons.length > 0 && (
+                        <>
+                            <div className="det-seasons">
+                                {seasons.map(s => (
+                                    <button key={s} className={`vod-sub${s === season ? ' on' : ''}`} onClick={() => setSeason(s)} onFocus={focusScroll}>Temporada {s}</button>
+                                ))}
+                            </div>
+                            <div className="det-eps">
+                                {eps.map(ep => {
+                                    const p = getProg(ep.id);
+                                    return (
+                                        <button key={ep.id} className="det-ep" onClick={() => playEp(ep)}>
+                                            <img className="det-ep-thumb" src={ep.thumbnail || poster || cardFor(d.name)} alt="" loading="lazy"
+                                                onError={e => { (e.currentTarget as HTMLImageElement).src = cardFor(d.name); }} />
+                                            <span className="det-ep-info">
+                                                <span className="det-ep-title">{ep.episode}. {ep.title}{p ? <em className="det-ep-resume"> · continuar {fmtTime(p.pos)}</em> : ''}</span>
+                                                {ep.overview && <span className="det-ep-ov">{ep.overview}</span>}
+                                            </span>
+                                            <span className="det-ep-play">▶</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
 
 /** Filmes e Séries estilo Netflix + board estilo Stremio: ao focar um título,
  *  o board do topo mostra backdrop, nota IMDb, ano, duração, gêneros, sinopse e
@@ -945,6 +1075,9 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const art = D.background && !/placehold/.test(D.background) ? D.background : '';
     const noArt = !art; // sem backdrop → mostra o pôster como miniatura (Stremio)
 
+    const progAll = loadProg();
+    const prog = (id: string) => { const p = progAll[id]; return p && p.dur ? p.pos / p.dur : 0; };
+
     const rows: { id: string; name: string; metas: any[] }[] = [];
     if (cwAll.length) rows.push({ id: '__cw', name: 'Continuar assistindo', metas: cwAll });
     if (featured.length) rows.push({ id: '__feat', name: '⭐ Em alta · Bem avaliados', metas: featured });
@@ -992,19 +1125,19 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                     <>
                         {rows.map(r => (
                             <section className="row" key={r.id}><h2>{r.name}</h2>
-                                <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                                <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
                             </section>
                         ))}
                         {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
                         {movieRows.map(row => (
                             <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
                             </section>
                         ))}
                         {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
                         {seriesRows.map(row => (
                             <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
                             </section>
                         ))}
                     </>
@@ -1017,7 +1150,7 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                     return (
                         <section className="vod-cat-sec">
                             <h2 className="sec-head">{name} <span className="vod-cat-count">{metas.length}</span></h2>
-                            <div className="vod-grid">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                            <div className="vod-grid">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
                         </section>
                     );
                 })()}
@@ -1026,7 +1159,7 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     );
 }
 
-function Tile({ meta, onPlay, onFocusItem }: { meta: any; onPlay: () => void; onFocusItem?: (m: any) => void }) {
+function Tile({ meta, onPlay, onFocusItem, progress }: { meta: any; onPlay: () => void; onFocusItem?: (m: any) => void; progress?: number }) {
     const shape = shapeFor(meta);
     // Cascata de logos (banco → próprio → irmão → card). Se uma falhar, o onError
     // avança pra próxima sozinho — nunca fica vazio.
@@ -1067,6 +1200,9 @@ function Tile({ meta, onPlay, onFocusItem }: { meta: any; onPlay: () => void; on
             onMouseEnter={onFocusItem ? () => onFocusItem(meta) : undefined}>
             <img src={src} alt={meta.name} loading="lazy" crossOrigin={isProxyLogo ? 'anonymous' : undefined}
                 onError={onErr} onLoad={onLoad} />
+            {progress != null && progress > 0.02 && progress < 0.97 && (
+                <span className="tile-prog"><i style={{ width: `${Math.round(progress * 100)}%` }} /></span>
+            )}
             <span className="tile-name">{meta.name}</span>
         </button>
     );
