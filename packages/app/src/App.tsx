@@ -257,7 +257,7 @@ function App() {
                     </>
                 )
             )}
-            {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} catFirst={catFirst} loading={chanLoading} />}
+            {section === 'channels' && engine && <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />}
             {section === 'games' && <GamesView metas={gamesMetas} loading={gamesLoading} onOpen={openItem} />}
 
             {picker && (
@@ -334,29 +334,69 @@ function GamesView({ metas, loading, onOpen }: { metas: any[]; loading: boolean;
     );
 }
 
+// Histórico local de canais assistidos (pra seção "Mais assistidos").
+const WATCH_KEY = 'rajada.chanwatch.v1';
+function loadWatch(): Record<string, number> { try { return JSON.parse(localStorage.getItem(WATCH_KEY) || '{}'); } catch { return {}; } }
+// Ranking de popularidade (semente p/ "Mais assistidos" sem histórico). O 1º = mais
+// popular. O uso real do usuário (watch) sobrepõe isso com o tempo.
+const POPULAR_CHANNELS = [
+    'globo', 'sportv', 'premiere', 'espn', 'sbt', 'record', 'band', 'globonews', 'cnn', 'multishow',
+    'telecine', 'tnt', 'combate', 'cazetv', 'caze', 'dazn', 'disney', 'hbo', 'max', 'warner',
+    'discovery', 'national geographic', 'natgeo', 'history', 'cartoon', 'gloob', 'fox', 'paramount', 'star', 'a&e',
+];
+function popularRank(name: string): number {
+    const n = (name || '').toLowerCase();
+    for (let k = 0; k < POPULAR_CHANNELS.length; k++) if (n.includes(POPULAR_CHANNELS[k])) return POPULAR_CHANNELS.length - k;
+    return 0;
+}
+
 /** Canais ao vivo: escolhe categoria → lista de canais + player ao lado. Zapeia
  *  ↑↓ atravessando categorias (divisor mostra onde cada uma acaba). Voltar volta
  *  pras categorias. */
-function ChannelsView({ engine, cats, flat, catFirst, loading }: {
-    engine: NexoEngine; cats: { id: string; name: string; count: number; sample?: any }[]; flat: FlatItem[]; catFirst: Record<string, number>; loading: boolean;
+function ChannelsView({ engine, cats, flat, loading }: {
+    engine: NexoEngine; cats: { id: string; name: string; count: number; sample?: any }[]; flat: FlatItem[]; loading: boolean;
 }) {
-    const [mode, setMode] = useState<'cats' | 'channels'>('cats'); // a lista mostra categorias ou canais
-    const [idx, setIdx] = useState(-1);          // índice (no flat) do canal selecionado
+    const [mode, setMode] = useState<'cats' | 'channels'>('channels'); // entra nos canais (já tocando)
+    const [idx, setIdx] = useState(-1);          // índice (no vflat) do canal selecionado
     const [url, setUrl] = useState('');
     const [title, setTitle] = useState('');
     const [opts, setOpts] = useState<any[]>([]);
+    const [watch] = useState<Record<string, number>>(loadWatch); // snapshot do histórico (não reembaralha na sessão)
     const scrollRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const timer = useRef<any>(null);
+    const started = useRef(false);
 
-    const chanIdxs = useMemo(() => { const a: number[] = []; flat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [flat]);
+    const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
+
+    // Lista de exibição: prepend "Mais assistidos" (pelo histórico local) se houver.
+    const { vflat, vcats, vCatFirst } = useMemo(() => {
+        // score = uso real (peso alto) + popularidade conhecida (semente)
+        const score = (f: FlatItem) => (watch[f.meta.name] || 0) * 1000 + popularRank(f.meta.name);
+        const seen = new Set<string>(); const top: FlatItem[] = [];
+        flat.filter(f => f.kind === 'chan')
+            .slice().sort((a, b) => score(b) - score(a))
+            .forEach(f => { if (score(f) > 0 && !seen.has(f.meta.name) && top.length < 12) { seen.add(f.meta.name); top.push(f); } });
+        let vflat = flat; let vcats = cats;
+        if (top.length) {
+            vflat = [{ kind: 'header', name: 'Mais assistidos', catId: '__top' } as FlatItem, ...top, ...flat];
+            vcats = [{ id: '__top', name: 'Mais assistidos', count: top.length }, ...cats];
+        }
+        const vCatFirst: Record<string, number> = {};
+        vflat.forEach((f, i) => { if (f.kind === 'header' && !(f.catId in vCatFirst)) vCatFirst[f.catId] = i; });
+        return { vflat, vcats, vCatFirst };
+    }, [flat, cats, watch]);
+
+    const chanIdxs = useMemo(() => { const a: number[] = []; vflat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [vflat]);
 
     const loadStream = useCallback(async (i: number) => {
-        const it = flat[i]; if (!it || it.kind !== 'chan') return;
+        const it = vflat[i]; if (!it || it.kind !== 'chan') return;
         setTitle(it.meta.name);
+        // conta como assistido (histórico p/ "Mais assistidos") — persiste sem reembaralhar agora
+        try { const w = loadWatch(); w[it.meta.name] = (w[it.meta.name] || 0) + 1; localStorage.setItem(WATCH_KEY, JSON.stringify(w)); } catch { }
         try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setUrl(streams[0]?.url || ''); }
         catch { setOpts([]); setUrl(''); }
-    }, [engine, flat]);
+    }, [engine, vflat]);
 
     const select = useCallback((i: number, now = false) => {
         setIdx(i);
@@ -365,10 +405,16 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
         setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
     }, [loadStream]);
 
+    // Entra já tocando o 1º canal (o mais assistido, se houver histórico).
+    useEffect(() => {
+        if (started.current || !chanIdxs.length) return;
+        started.current = true; select(chanIdxs[0], true);
+    }, [chanIdxs, select]);
+
     const pickCat = (catId: string) => {
-        const h = catFirst[catId];
+        const h = vCatFirst[catId]; if (h == null) return;
         let fc = -1;
-        for (let i = h + 1; i < flat.length; i++) { if (flat[i].kind === 'chan') { fc = i; break; } if (flat[i].kind === 'header') break; }
+        for (let i = h + 1; i < vflat.length; i++) { if (vflat[i].kind === 'chan') { fc = i; break; } if (vflat[i].kind === 'header') break; }
         setMode('channels');
         if (fc >= 0) select(fc, true);
         setTimeout(() => stageRef.current?.focus(), 30);
@@ -385,8 +431,7 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
         else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setMode('cats'); }
     };
 
-    const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
-    const curCatName = idx >= 0 ? label(cats.find(c => c.id === flat[idx]?.catId)?.name || '') : '';
+    const curCatName = idx >= 0 ? label(vcats.find(c => c.id === vflat[idx]?.catId)?.name || '') : '';
 
     if (loading && !flat.length) return <div className="status">Carregando canais…</div>;
     if (!loading && !flat.length) return <div className="status">Nenhum canal (provedor fora do ar?)</div>;
@@ -403,14 +448,14 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
                 </div>
                 <div className="chan-scroll" ref={scrollRef}>
                     {inCats ? (
-                        cats.map(c => (
-                            <button key={c.id} className={`cat-row${flat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)}>
+                        vcats.map(c => (
+                            <button key={c.id} className={`cat-row${vflat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)}>
                                 <span className="cat-row-name">{label(c.name)}</span>
                                 <span className="cat-row-count">{c.count}</span>
                             </button>
                         ))
                     ) : (
-                        flat.map((f, i) => f.kind === 'header' ? (
+                        vflat.map((f, i) => f.kind === 'header' ? (
                             <div className="chan-divider" key={'h' + i}><span>{label(f.name)}</span></div>
                         ) : (
                             <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
