@@ -16,10 +16,18 @@ async function makeHttp(): Promise<HttpClient> {
     return new FetchHttpClient();
 }
 
+// Chave TMDB padrão (de .env.local / build-time, fora do GitHub) — pra posters/
+// hero funcionarem sem o usuário digitar.
+const DEFAULT_TMDB = (import.meta as any).env?.VITE_TMDB_KEY || null;
+
 export async function createEngine(config: AddonConfig, options: EngineOptions): Promise<NexoEngine> {
     const http = await makeHttp();
-    // Banco de logos (iptv-org BR, bundlado) como fallback automático.
-    const opts: EngineOptions = { ...options, logoBank: options.logoBank || (logoBank as Record<string, string>) };
+    // Banco de logos (iptv-org BR, bundlado) como fallback automático + TMDB padrão.
+    const opts: EngineOptions = {
+        ...options,
+        tmdbApiKey: options.tmdbApiKey || DEFAULT_TMDB,
+        logoBank: options.logoBank || (logoBank as Record<string, string>),
+    };
     const engine = new NexoEngine(config, { http, options: opts });
     await engine.load();
     return engine;
