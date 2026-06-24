@@ -591,11 +591,12 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
     }, [engine, gflat]);
 
     const select = useCallback((i: number, now = false) => {
+        if (now && i === idx) { stageRef.current?.focus(); return; }  // já é o jogo atual → não recarrega
         setIdx(i);
         clearTimeout(timer.current);
         timer.current = setTimeout(() => loadStream(i), now ? 0 : 380);
-        setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
-    }, [loadStream]);
+        setTimeout(() => { scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }); stageRef.current?.focus(); }, 0);
+    }, [loadStream, idx]);
 
     // Entra já no jogo clicado.
     useEffect(() => {
@@ -750,11 +751,16 @@ function ChannelsView({ engine, cats, flat, loading }: {
     }, [engine, vflat]);
 
     const select = useCallback((i: number, now = false) => {
+        const it = vflat[i];
+        // Clicar/OK no canal que JÁ está tocando não recarrega (evita "sempre carregando"
+        // em cliques repetidos). Só devolve o foco pro stage (modo zapping).
+        if (now && it?.kind === 'chan' && it.meta.id === curIdRef.current) { stageRef.current?.focus(); return; }
         setIdx(i);
         clearTimeout(timer.current);
         timer.current = setTimeout(() => loadStream(i), now ? 0 : 380);  // debounce no zapping
-        setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
-    }, [loadStream]);
+        // Mantém o foco no stage (não na linha) → ↑↓ zapeia e → vai pro player.
+        setTimeout(() => { scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }); stageRef.current?.focus(); }, 0);
+    }, [loadStream, vflat]);
 
     // Entra já tocando o 1º canal (o mais assistido, se houver histórico).
     useEffect(() => {
@@ -940,7 +946,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     return (
         <div ref={boxRef}
             className={`live-player${fs ? ' fs' : ''}`}
-            tabIndex={canFs ? 0 : -1}
+            tabIndex={0}
             role="button"
             aria-label="Player — OK para tela cheia"
             onKeyDown={onBoxKey}
