@@ -55,6 +55,21 @@ function App() {
     const [engine, setEngine] = useState<NexoEngine | null>(null);
     const [rows, setRows] = useState<Row[]>([]);
     const [status, setStatus] = useState('');
+    const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
+
+    const play = (url: string) => { window.open(url, '_blank'); };
+
+    const openItem = useCallback(async (meta: any) => {
+        if (!engine) return;
+        const streams = await engine.getStreams(meta.id);
+        if (!streams.length) { setStatus('Sem stream disponível'); setTimeout(() => setStatus(''), 2500); return; }
+        if (streams.length === 1) { play(streams[0].url); return; }
+        // Várias opções (qualidades / canais da família) → mostra o seletor.
+        setPicker({
+            title: meta.name,
+            options: streams.map((s: any) => ({ label: String(s.title || '').replace(/\s*-\s*Live$/i, '').trim() || meta.name, url: s.url })),
+        });
+    }, [engine]);
 
     const boot = useCallback(async (s: SavedConfig) => {
         setStatus('Carregando…');
@@ -103,15 +118,26 @@ function App() {
                     <h2>{row.name}</h2>
                     <div className="tiles">
                         {row.metas.map((m: any) => (
-                            <Tile key={m.id} meta={m} onPlay={async () => {
-                                if (!engine) return;
-                                const streams = await engine.getStreams(m.id);
-                                if (streams[0]?.url) window.open(streams[0].url, '_blank');
-                            }} />
+                            <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />
                         ))}
                     </div>
                 </section>
             ))}
+
+            {picker && (
+                <div className="modal" onClick={() => setPicker(null)}>
+                    <div className="modal-box" onClick={e => e.stopPropagation()}>
+                        <h3>{picker.title}</h3>
+                        <p className="modal-sub">Escolha a opção</p>
+                        <div className="opts">
+                            {picker.options.map((o, i) => (
+                                <button key={i} className="opt" onClick={() => { play(o.url); setPicker(null); }}>{o.label}</button>
+                            ))}
+                        </div>
+                        <button className="modal-close" onClick={() => setPicker(null)}>fechar</button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

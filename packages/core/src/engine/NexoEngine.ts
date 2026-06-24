@@ -262,10 +262,13 @@ export class NexoEngine {
     // Nome-base do canal: tira [tags] e tokens de qualidade soltos → 1 entrada por
     // emissora ("ADULT SWIM [FHD][H265]" e "ADULT SWIM [SD]" → "ADULT SWIM").
     _channelBaseName(name: string) {
-        return (name || '')
-            .replace(/\[[^\]]*\]/g, ' ')
+        const base = (name || '')
+            .replace(/\[[^\]]*\]/g, ' ')                              // [FHD], [H265]…
             .replace(/\b(FHD|HD|SD|4K|UHD|H265|H264|HEVC|FULLHD)\b/gi, ' ')
-            .replace(/\s+/g, ' ').trim();
+            .replace(/\s+/g, ' ').trim()
+            .replace(/\s+\d{1,2}$/, '')                               // família numerada: "Apple TV 4" → "Apple TV"
+            .trim();
+        return base;
     }
 
     _encodeChannelGroupId(key: string) {
@@ -309,8 +312,14 @@ export class NexoEngine {
         const base = (sep >= 0 ? key.slice(0, sep) : key);
         const cat = sep >= 0 ? key.slice(sep + 1) : '';
         const baseLc = base.toLowerCase();
-        const variants = this.channels.filter(c => this._channelBaseName(c.name).toLowerCase() === baseLc && (c.category || '') === cat);
-        variants.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
+        const all = this.channels.filter(c => this._channelBaseName(c.name).toLowerCase() === baseLc && (c.category || '') === cat);
+        // 1 opção por sub-canal (ex: "Premiere 2"), na MELHOR qualidade — sem repetir
+        // FHD/HD/SD. subKey = nome sem tags de qualidade (mantém o número).
+        const subKey = (n: string) => (n || '').replace(/\[[^\]]*\]/g, ' ').replace(/\b(FHD|HD|SD|4K|UHD|H265|H264|HEVC|FULLHD)\b/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+        all.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
+        const best = new Map<string, any>();
+        for (const c of all) { const k = subKey(c.name); if (!best.has(k)) best.set(k, c); }
+        const variants = [...best.values()].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
         return { base, cat, variants };
     }
 
