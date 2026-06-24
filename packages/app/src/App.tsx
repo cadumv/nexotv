@@ -613,7 +613,9 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer sources={sources} title={title} />
+                <LivePlayer sources={sources} title={title}
+                    options={dedupStreams(opts).map(o => ({ label: o.label, urls: o.urls }))}
+                    onPick={(urls) => setSources(urls)} />
                 <div className="chan-now">
                     <span className="now-title">{title || 'Selecione um jogo'}{note && <em className="now-note"> — {note}</em>}</span>
                     {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
@@ -839,7 +841,9 @@ function ChannelsView({ engine, cats, flat, loading }: {
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer sources={sources} title={title} />
+                <LivePlayer sources={sources} title={title}
+                    options={streamOptions(opts).map(o => ({ label: o.label, urls: [o.url] }))}
+                    onPick={(urls) => { const all = streamOptions(opts).map(o => o.url); setSources([urls[0], ...all.filter(u => u !== urls[0])]); }} />
                 <div className="chan-now">
                     <div className="now-head">
                         {curMeta && (
@@ -874,10 +878,17 @@ function ChannelsView({ engine, cats, flat, loading }: {
 /** Player embutido (canais/jogos ao vivo): recebe a CADEIA de fontes daquela
  *  marca (várias regionais/qualidades) e faz failover automático — se uma falha,
  *  já tenta a próxima sozinho. Troca de fonte ao zapear, sem fechar. */
-function LivePlayer({ sources, title }: { sources: string[]; title: string }) {
+function LivePlayer({ sources, title, options, onPick }: {
+    sources: string[]; title: string;
+    options?: { label: string; urls: string[] }[];   // fontes alternativas (p/ trocar em tela cheia)
+    onPick?: (urls: string[]) => void;
+}) {
     const ref = useRef<HTMLVideoElement>(null);
+    const boxRef = useRef<HTMLDivElement>(null);
+    const fsBtnRef = useRef<HTMLButtonElement>(null);
     const [i, setI] = useState(0);          // fonte atual dentro da cadeia
     const [dead, setDead] = useState(false); // todas as fontes falharam
+    const [fs, setFs] = useState(false);     // tela cheia (CSS — funciona em qualquer TV)
     // Nova seleção (canal/jogo/marca) → recomeça da melhor fonte.
     useEffect(() => { setI(0); setDead(false); }, [sources]);
     const url = sources[i] || '';
@@ -889,13 +900,49 @@ function LivePlayer({ sources, title }: { sources: string[]; title: string }) {
         const handle = attachAdaptive(v, url, onFatal);
         return () => { cancelled = true; handle.destroy(); };
     }, [url, i, sources]);
+    // Em tela cheia, Esc/Voltar sai da tela cheia (e NÃO volta pras categorias).
+    useEffect(() => {
+        if (!fs) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); setFs(false); }
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [fs]);
+    // Leva o foco pro controle certo ao entrar/sair (navegação por D-pad).
+    useEffect(() => {
+        const t = setTimeout(() => {
+            if (fs) (boxRef.current?.querySelector('.live-ov-exit') as HTMLElement | null)?.focus();
+            else fsBtnRef.current?.focus();
+        }, 60);
+        return () => clearTimeout(t);
+    }, [fs]);
     const trying = i > 0 && !dead;
+    const active = sources[0];
     return (
-        <div className="live-player">
+        <div ref={boxRef} className={`live-player${fs ? ' fs' : ''}`}>
             <video ref={ref} controls autoPlay playsInline className="live-video" />
+            {!!sources.length && (
+                <button ref={fsBtnRef} className="live-fs-btn" onClick={() => setFs(f => !f)}
+                    aria-label="Tela cheia" title="Tela cheia">{fs ? '🗗' : '⛶'}</button>
+            )}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
             {trying && <div className="live-fallback">Fonte instável — tentando alternativa {i + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
+            {fs && (
+                <div className="live-ov">
+                    <span className="live-ov-title">{title}</span>
+                    {options && options.length > 1 && (
+                        <div className="live-ov-opts">
+                            {options.map((o, k) => (
+                                <button key={k} className={`now-opt${o.urls[0] === active ? ' on' : ''}`}
+                                    onClick={() => onPick?.(o.urls)}>{o.label}</button>
+                            ))}
+                        </div>
+                    )}
+                    <button className="live-ov-exit" onClick={() => setFs(false)}>✕ Sair da tela cheia</button>
+                </div>
+            )}
         </div>
     );
 }
