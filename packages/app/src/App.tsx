@@ -610,6 +610,9 @@ function ChannelsView({ engine, cats, flat, loading }: {
     const [title, setTitle] = useState('');
     const [opts, setOpts] = useState<any[]>([]);
     const [watch] = useState<Record<string, number>>(loadWatch); // snapshot do histórico (não reembaralha na sessão)
+    const [favSnap] = useState<Record<string, any>>(loadFav);    // snapshot dos favoritos (seção fixa na sessão)
+    const [, setFavTick] = useState(0);                          // re-render do botão estrela ao alternar
+    const [epg, setEpg] = useState<{ now: string; next: string }>({ now: '', next: '' });
     const scrollRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const timer = useRef<any>(null);
@@ -629,15 +632,23 @@ function ChannelsView({ engine, cats, flat, loading }: {
         flat.filter(f => f.kind === 'chan')
             .slice().sort((a, b) => score(b) - score(a))
             .forEach(f => { if (score(f) > 0 && !seen.has(f.meta.name) && top.length < 12) { seen.add(f.meta.name); top.push(f); } });
+        // Favoritos (snapshot): canais marcados que existem na lista atual.
+        const favs = flat.filter(f => f.kind === 'chan' && favSnap[f.meta.id]);
         let vflat = flat; let vcats = cats;
-        if (top.length) {
-            vflat = [{ kind: 'header', name: 'Mais assistidos', catId: '__top' } as FlatItem, ...top, ...flat];
-            vcats = [{ id: '__top', name: 'Mais assistidos', count: top.length }, ...cats];
+        const prefixFlat: FlatItem[] = []; const prefixCats: any[] = [];
+        if (favs.length) {
+            prefixFlat.push({ kind: 'header', name: '★ Favoritos', catId: '__fav' } as FlatItem, ...favs);
+            prefixCats.push({ id: '__fav', name: '★ Favoritos', count: favs.length });
         }
+        if (top.length) {
+            prefixFlat.push({ kind: 'header', name: 'Mais assistidos', catId: '__top' } as FlatItem, ...top);
+            prefixCats.push({ id: '__top', name: 'Mais assistidos', count: top.length });
+        }
+        if (prefixFlat.length) { vflat = [...prefixFlat, ...flat]; vcats = [...prefixCats, ...cats]; }
         const vCatFirst: Record<string, number> = {};
         vflat.forEach((f, i) => { if (f.kind === 'header' && !(f.catId in vCatFirst)) vCatFirst[f.catId] = i; });
         return { vflat, vcats, vCatFirst };
-    }, [flat, cats, watch]);
+    }, [flat, cats, watch, favSnap]);
 
     const chanIdxs = useMemo(() => { const a: number[] = []; vflat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [vflat]);
 
@@ -651,6 +662,9 @@ function ChannelsView({ engine, cats, flat, loading }: {
         watchTimer.current = setTimeout(() => {
             try { const w = loadWatch(); w[name] = (w[name] || 0) + 1; localStorage.setItem(WATCH_KEY, JSON.stringify(w)); } catch { }
         }, 10 * 60 * 1000);
+        // Agora / a seguir (EPG) — fallback "AO VIVO" quando o canal não tem EPG.
+        setEpg({ now: '', next: '' });
+        engine.getDetailedMeta(it.meta.id).then((dm: any) => setEpg(parseEpgDesc(dm?.description))).catch(() => { });
         try { const streams = await engine.getStreams(it.meta.id); setOpts(streams); setSources(dedupStreams(streams)[0]?.urls || []); }
         catch { setOpts([]); setSources([]); }
     }, [engine, vflat]);
@@ -689,6 +703,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
     };
 
     const curCatName = idx >= 0 ? label(vcats.find(c => c.id === vflat[idx]?.catId)?.name || '') : '';
+    const curMeta = vflat[idx]?.meta;
 
     if (loading && !flat.length) return <div className="status">Carregando canais…</div>;
     if (!loading && !flat.length) return <div className="status">Nenhum canal (provedor fora do ar?)</div>;
@@ -728,7 +743,16 @@ function ChannelsView({ engine, cats, flat, loading }: {
             <main className="chan-stage">
                 <LivePlayer sources={sources} title={title} />
                 <div className="chan-now">
-                    <span className="now-title">{title || 'Selecione um canal'}</span>
+                    <div className="now-head">
+                        {curMeta && (
+                            <button className={`now-fav${isFav(curMeta.id) ? ' on' : ''}`} title="Favoritar canal"
+                                onClick={() => { toggleFav(curMeta); setFavTick(t => t + 1); }}>{isFav(curMeta.id) ? '★' : '☆'}</button>
+                        )}
+                        <span className="now-title">{title || 'Selecione um canal'}</span>
+                        {epg.now
+                            ? <span className="now-epg"><b>AGORA:</b> {epg.now}{epg.next ? <> <span className="now-epg-next">· a seguir: {epg.next}</span></> : ''}</span>
+                            : title ? <span className="now-epg dim">● AO VIVO</span> : null}
+                    </div>
                     {(() => { const ds = dedupStreams(opts); return ds.length > 1 && (
                         <div className="now-opts">
                             {ds.map((o, i) => (
@@ -878,6 +902,32 @@ function resolveResume(videos: any[]): { ep: any; mode: 'continue' | 'next' | 'f
     }
     return { ep: ordered[0], mode: 'first', pos: 0 };
 }
+// Extrai "agora / a seguir" da descrição do canal (getDetailedMeta), que o core
+// monta a partir do EPG: linhas "AGORA: ..." e "A SEGUIR:\nHH:MM - ...".
+function parseEpgDesc(desc: string): { now: string; next: string } {
+    const lines = String(desc || '').split('\n').map(s => s.trim()).filter(Boolean);
+    let now = '', next = '';
+    for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(/^AGORA:\s*(.+)$/i);
+        if (m) { now = m[1]; continue; }
+        if (/^A SEGUIR/i.test(lines[i])) { const nx = lines[i + 1]; if (nx) next = nx.replace(/^\d{1,2}:\d{2}\s*-\s*/, ''); break; }
+    }
+    return { now, next };
+}
+
+// --- Favoritos / Minha lista (filmes, séries, canais) -------------------------
+const FAV_KEY = 'rajada.fav.v1';
+function loadFav(): Record<string, any> { try { return JSON.parse(localStorage.getItem(FAV_KEY) || '{}'); } catch { return {}; } }
+function isFav(id: string): boolean { return !!loadFav()[id]; }
+function toggleFav(meta: any): boolean {
+    try {
+        const f = loadFav();
+        if (f[meta.id]) delete f[meta.id];
+        else f[meta.id] = { id: meta.id, name: meta.name, poster: meta.poster, posterChain: meta.posterChain, posterShape: meta.posterShape, type: meta.type };
+        localStorage.setItem(FAV_KEY, JSON.stringify(f));
+        return !!f[meta.id];
+    } catch { return false; }
+}
 function fmtTime(s: number): string {
     s = Math.max(0, Math.floor(s || 0));
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
@@ -961,6 +1011,12 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
     const [d, setD] = useState<any>(meta);
     const [loading, setLoading] = useState(true);
     const [season, setSeason] = useState<number>(1);
+    const [fav, setFav] = useState<boolean>(() => isFav(meta.id));
+    const FavBtn = () => (
+        <button className={`details-fav${fav ? ' on' : ''}`} onClick={() => setFav(toggleFav(meta))}>
+            {fav ? '✓ Minha lista' : '＋ Minha lista'}
+        </button>
+    );
     useEffect(() => {
         let dead = false; setLoading(true);
         engine.getDetailedMeta(meta.id)
@@ -974,6 +1030,7 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
     const isSeries = videos.length > 0 || d.type === 'series' || (typeof meta.id === 'string' && /ser\w*_/.test(meta.id));
     const seasons = [...new Set(videos.map(v => v.season))].sort((a, b) => a - b);
     const eps = videos.filter(v => v.season === season).sort((a, b) => a.episode - b.episode);
+    const watchedMap = loadWatched();
     const genres: string[] = Array.isArray(d.genres) ? d.genres : [];
     const cast: string[] = Array.isArray(d.cast) ? d.cast : [];
     const art = d.background && !/placehold/.test(d.background) ? d.background : '';
@@ -1016,12 +1073,14 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
                                 <div className="details-actions">
                                     <button className="vb-play" onClick={() => startMovie(mProg?.pos || 0)}>▶ {mProg ? `Continuar (${fmtTime(mProg.pos)})` : 'Assistir'}</button>
                                     {mProg && <button className="details-restart" onClick={() => startMovie(0)}>Reiniciar</button>}
+                                    <FavBtn />
                                 </div>
                             )}
                             {isSeries && resume && (
                                 <div className="details-actions">
                                     <button className="vb-play" onClick={() => playEp(resume.ep, resume.pos)}>▶ {resumeLabel}</button>
                                     {resume.mode === 'continue' && <button className="details-restart" onClick={() => playEp(resume.ep, 0)}>Reiniciar ep.</button>}
+                                    <FavBtn />
                                 </div>
                             )}
                         </div>
@@ -1042,12 +1101,13 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
                             <div className="det-eps">
                                 {eps.map(ep => {
                                     const p = getProg(ep.id);
+                                    const done = !p && !!watchedMap[ep.id];
                                     return (
-                                        <button key={ep.id} className="det-ep" onClick={() => playEp(ep)}>
+                                        <button key={ep.id} className={`det-ep${done ? ' done' : ''}`} onClick={() => playEp(ep)}>
                                             <img className="det-ep-thumb" src={ep.thumbnail || poster || cardFor(d.name)} alt="" loading="lazy"
                                                 onError={e => { (e.currentTarget as HTMLImageElement).src = cardFor(d.name); }} />
                                             <span className="det-ep-info">
-                                                <span className="det-ep-title">{ep.episode}. {ep.title}{p ? <em className="det-ep-resume"> · continuar {fmtTime(p.pos)}</em> : ''}</span>
+                                                <span className="det-ep-title">{done && <span className="det-ep-check">✓</span>}{ep.episode}. {ep.title}{p ? <em className="det-ep-resume"> · continuar {fmtTime(p.pos)}</em> : ''}</span>
                                                 {ep.overview && <span className="det-ep-ov">{ep.overview}</span>}
                                             </span>
                                             <span className="det-ep-play">▶</span>
@@ -1191,7 +1251,9 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const progAll = loadProg();
     const prog = (id: string) => { const p = progAll[id]; return p && p.dur ? p.pos / p.dur : 0; };
 
+    const favList = Object.values(loadFav()).filter((m: any) => m.type === 'movie' || m.type === 'series');
     const rows: { id: string; name: string; metas: any[] }[] = [];
+    if (favList.length) rows.push({ id: '__fav', name: '★ Minha lista', metas: favList });
     if (cwAll.length) rows.push({ id: '__cw', name: 'Continuar assistindo', metas: cwAll });
     if (featured.length) rows.push({ id: '__feat', name: '⭐ Em alta · Bem avaliados', metas: featured });
 

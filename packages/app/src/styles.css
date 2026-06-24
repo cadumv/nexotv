@@ -106,8 +106,16 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .live-video { width: 100%; height: 100%; background: #000; object-fit: cover; }
 .live-empty { position: absolute; color: #777; font-size: 18px; }
 .live-fallback { position: absolute; bottom: 14px; left: 14px; background: rgba(0,0,0,.72); color: #ffd34d; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 8px; }
-.chan-now { flex: 0 0 auto; padding: 12px 18px; background: #0b0b0f; display: flex; align-items: center; gap: 16px; min-width: 0; }
-.now-title { font-weight: 800; font-size: 16px; flex: 0 0 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38%; }
+.chan-now { flex: 0 0 auto; padding: 10px 18px 12px; background: #0b0b0f; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.now-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.now-fav { flex: 0 0 auto; background: transparent; border: 0; color: #f5c518; font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 4px; }
+.now-fav:not(.on) { color: #8a8a93; }
+.now-fav:hover { color: #f5c518; }
+.now-title { font-weight: 800; font-size: 16px; flex: 0 0 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32%; }
+.now-epg { font-size: 13px; color: #cfcfd4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.now-epg b { color: #ff5b52; font-weight: 800; margin-right: 4px; }
+.now-epg.dim { color: #8a8a93; font-weight: 700; }
+.now-epg-next { color: #8a8a93; }
 /* linha de transmissões: rola sozinha conforme o foco (D-pad na TV / mouse na
    web), sem barra de rolagem visível. Máscara nas pontas indica que há mais. */
 .now-opts { display: flex; gap: 8px; flex: 1 1 auto; min-width: 0; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; scroll-behavior: smooth; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
@@ -242,6 +250,11 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .details-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .details-restart { background: rgba(255,255,255,.14); color: #fff; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
 .details-restart:hover { background: rgba(255,255,255,.24); }
+.details-fav { background: rgba(255,255,255,.14); color: #fff; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.details-fav:hover { background: rgba(255,255,255,.24); }
+.details-fav.on { background: rgba(245,197,24,.18); border-color: #f5c518; color: #f5c518; }
+.det-ep.done { opacity: .68; }
+.det-ep-check { color: #16b39b; font-weight: 900; margin-right: 6px; }
 .details-body { padding: 18px 28px 26px; }
 .details-desc { font-size: 14.5px; color: #dfe2e8; line-height: 1.5; margin: 0 0 12px; }
 .det-seasons { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 10px; }
