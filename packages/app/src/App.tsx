@@ -436,11 +436,16 @@ function compEmoji(name: string): string {
 // → "Globo", "CAZE TV 1 [HD]" → "CazeTV", "Premiere 2" → "Premiere"). Agrupa
 // variantes regionais e qualidades numa opção só, limpando a barra.
 const PROVIDER_BRANDS = ['Premiere', 'SporTV', 'Combate', 'Globoplay', 'Globo+', 'Globo', 'SBT', 'CazeTV', 'Caze', 'ESPN', 'DAZN', 'Disney+', 'Star+', 'Paramount+', 'TNT Sports', 'TNT', 'Record', 'Band', 'Amazon', 'Apple'];
+const isTimeTok = (w: string) => /^\d{1,2}[:h.]\d{0,2}$/.test(w) || /^\d{1,4}$/.test(w);
 function providerBrand(title: string): string {
-    const s = String(title || '').replace(/\[[^\]]*\]/g, '').replace(/\s*-\s*Live$/i, '').trim();
+    let s = String(title || '').replace(/\[[^\]]*\]/g, '').replace(/\s*-\s*Live$/i, '').trim();
+    // Remove horário no começo (ex.: "16:00", "16h00", "16h") — vinha virando rótulo.
+    s = s.replace(/^\s*\d{1,2}[:h.]\d{0,2}\b\s*/i, '').trim();
     const low = s.toLowerCase().replace(/\s+/g, '');
     for (const b of PROVIDER_BRANDS) if (low.includes(b.toLowerCase().replace(/\s+/g, ''))) return b === 'Caze' ? 'CazeTV' : b;
-    return s.split(/\s+/)[0] || s || 'Opção';
+    // Fallback: 1ª palavra que NÃO seja hora/número (senão, rótulo genérico).
+    const words = s.split(/\s+/).filter(Boolean);
+    return words.find(w => !isTimeTok(w)) || 'Transmissão';
 }
 function qualityRank(title: string): number {
     const t = String(title || '');
