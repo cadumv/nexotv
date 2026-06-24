@@ -61,8 +61,25 @@ interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?
 // Elementos focáveis VISÍVEIS na tela.
 function navFocusables(): HTMLElement[] {
     const sel = 'button:not([disabled]), [tabindex]:not([tabindex="-1"]), a[href], input:not([disabled])';
-    return Array.from(document.querySelectorAll<HTMLElement>(sel))
+    // Se há um overlay aberto (detalhes/busca/player/tela cheia), confina o D-pad a ele
+    // — senão o foco "vaza" pros cards atrás do modal.
+    const overlay = document.querySelector('.details-box, .search-ov, .player-box, .live-player.fs') as HTMLElement | null;
+    const root: ParentNode = overlay || document;
+    return Array.from(root.querySelectorAll<HTMLElement>(sel))
         .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
+}
+
+// Pilha de "voltar": o botão Voltar do controle (na TV, via @capacitor/app) executa o
+// handler do topo (sai da tela cheia → fecha modal → volta de tela); vazio = sai do app.
+const backStack: Array<() => void> = [];
+function useBackHandler(active: boolean, fn: () => void) {
+    const ref = useRef(fn); ref.current = fn;
+    useEffect(() => {
+        if (!active) return;
+        const h = () => ref.current();
+        backStack.push(h);
+        return () => { const i = backStack.lastIndexOf(h); if (i >= 0) backStack.splice(i, 1); };
+    }, [active]);
 }
 // Move o foco pro elemento mais próximo na direção da seta (geometria).
 function spatialMove(dir: string): boolean {
@@ -168,6 +185,21 @@ function App() {
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
+
+    // Botão Voltar do controle (Android TV) → pilha de voltar; vazio = sai do app.
+    useEffect(() => {
+        let handle: any;
+        import('@capacitor/app').then(({ App: CapApp }: any) => {
+            CapApp.addListener('backButton', () => {
+                if (backStack.length) backStack[backStack.length - 1]();
+                else CapApp.exitApp();
+            }).then((h: any) => { handle = h; });
+        }).catch(() => { /* web/desktop: sem Capacitor, usa-se Esc */ });
+        return () => { try { handle?.remove?.(); } catch { } };
+    }, []);
+
+    // Voltar de uma seção → tela inicial (overlays empilham por cima e voltam antes).
+    useBackHandler(section !== 'pick', () => setSection('pick'));
 
     // Foco inicial ao entrar numa seção (ponto de partida pro D-pad).
     useEffect(() => {
@@ -825,9 +857,15 @@ function ChannelsView({ engine, cats, flat, loading }: {
         // Enter/OK: o onClick do botão focado dispara pickCat naturalmente.
     };
     const onKey = (e: React.KeyboardEvent) => {
-        if (mode === 'cats') catsKey(e);
-        else stageNav(e, stageRef.current, move, () => setMode('cats'));
+        if (mode === 'cats') { catsKey(e); return; }
+        // Canais: ↑ no topo da lista leva o foco pro botão "☰ Categorias".
+        if (e.key === 'ArrowUp' && document.activeElement === stageRef.current && chanIdxs.indexOf(idx) <= 0) {
+            e.preventDefault(); (stageRef.current?.querySelector('.chan-list-head .back') as HTMLElement | null)?.focus(); return;
+        }
+        stageNav(e, stageRef.current, move, () => setMode('cats'));
     };
+    // Voltar do controle: na lista de canais vai pras categorias (não sai do app).
+    useBackHandler(mode === 'channels', () => setMode('cats'));
 
     // Ao entrar nas categorias, foca a categoria atual (ou a 1ª) — começa já posicionado.
     useEffect(() => {
@@ -1030,6 +1068,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
     const togglePlay = () => { const v = ref.current; if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
     const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
+    useBackHandler(fs, () => setFs(false));   // Voltar do controle sai da tela cheia (não do app)
 
     // Mantém os ícones de play/mudo sincronizados com o vídeo.
     useEffect(() => {
@@ -1115,6 +1154,7 @@ function LivePlayer({ sources, title, options, onPick }: {
 function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; title: string; contentKey?: string; resumeFrom?: number; onClose: () => void }) {
     const ref = useRef<HTMLVideoElement>(null);
     const [err, setErr] = useState(false);
+    useBackHandler(true, onClose);   // Voltar do controle fecha o player
     useEffect(() => {
         const v = ref.current; if (!v) return;
         // Player adaptativo: nativo → hls.js conforme a plataforma; só marca erro
@@ -1268,6 +1308,7 @@ function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel,
     useEffect(() => () => { try { recRef.current?.stop(); } catch { } }, []);
     useEffect(() => { inputRef.current?.focus(); }, []);
     useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
+    useBackHandler(true, onClose);   // Voltar do controle fecha a busca
     useEffect(() => {
         clearTimeout(timer.current);
         const term = q.trim();
@@ -1348,6 +1389,16 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
         return () => { dead = true; };
     }, [meta.id]);
     useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
+    useBackHandler(true, onClose);   // Voltar do controle fecha o modal
+    // Leva o foco pra dentro do modal (senão o D-pad mexe nos cards atrás).
+    useEffect(() => {
+        if (loading) return;
+        const t = setTimeout(() => {
+            const b = document.querySelector('.details-box .vb-play, .details-box .details-fav, .details-box .details-close') as HTMLElement | null;
+            b?.focus();
+        }, 80);
+        return () => clearTimeout(t);
+    }, [loading]);
 
     const videos: any[] = Array.isArray(d.videos) ? d.videos : [];
     const isSeries = videos.length > 0 || d.type === 'series' || (typeof meta.id === 'string' && /ser\w*_/.test(meta.id));
