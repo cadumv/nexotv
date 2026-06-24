@@ -11,33 +11,39 @@ nativo fica pra uma fase 2).
 - **Android Studio** + **Android SDK** (Platform 34 + build-tools). `ANDROID_HOME` apontando pro SDK.
 - Pra instalar na TV: `adb` (vem no SDK platform-tools).
 
-## Passos
-```bash
-# 1) instalar deps (na raiz do monorepo)
+## Os 3 comandos (PowerShell, na raiz do monorepo `nexotv/`)
+A pasta `android/` JÁ existe com o manifest de TV aplicado, então NÃO precisa de
+`cap add android`. É só:
+
+```powershell
+# 1) instalar deps (uma vez)
 pnpm install
 
-# 2) build do web (gera packages/app/dist)
-pnpm --filter @nexotv/app build:web
+# 2) build web + sync + gerar o APK de debug  (script "apk" faz os 3 passos)
+pnpm --filter @nexotv/app apk
 
-# 3) entrar no app e sincronizar o projeto Android
-cd packages/app
-
-# Se a pasta android/ NÃO existir (ela é gitignored), crie-a uma vez:
-#   npx cap add android
-# (depois aplique o trecho de TV do AndroidManifest abaixo)
-
-npx cap sync android      # copia o dist + aplica capacitor.config (cleartext HTTP)
-
-# 4) gerar o APK de debug
-cd android
-./gradlew assembleDebug   # Windows: gradlew.bat assembleDebug
-# APK em: android/app/build/outputs/apk/debug/app-debug.apk
-
-# 5) instalar (celular ou Android TV via adb)
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# 3) instalar no device/TV conectado por adb
+pnpm --filter @nexotv/app apk:install
 ```
-No celular: copie o APK e instale (habilite "fontes desconhecidas"). Na TV:
-`adb connect <ip-da-tv>:5555` e depois o `adb install`.
+
+- O APK fica em: `packages/app/android/app/build/outputs/apk/debug/app-debug.apk`
+- No **celular**: copie esse .apk e instale (habilite "fontes desconhecidas") — não
+  precisa do passo 3.
+- Na **Android TV**: `adb connect <ip-da-tv>:5555` antes do passo 3.
+
+### ⚠️ Antes do passo 2 — confira o SDK
+O `android/local.properties` aponta `sdk.dir=C:/Users/caduv/asdk`. Se o seu Android
+SDK estiver em OUTRO lugar (o padrão do Android Studio é
+`C:\Users\<voce>\AppData\Local\Android\Sdk`), faça UMA das opções:
+- edite essa linha do `local.properties` pro caminho real, **ou**
+- defina a variável de ambiente `ANDROID_HOME` e apague o `local.properties`
+  (o Gradle cai no `ANDROID_HOME`).
+
+E confirme o JDK: `java -version` tem que dizer **17** (Gradle 8.2.1 + AGP 8.2.1 não
+buildam com Java 8). Aponte `JAVA_HOME` pro JDK 17 se tiver mais de um instalado.
+
+> Se preferir os passos crus em vez do script: `pnpm --filter @nexotv/app build:web`
+> → `cd packages/app && npx cap sync android` → `cd android && gradlew.bat assembleDebug`.
 
 ## Cleartext HTTP — já configurado
 `capacitor.config.json` já tem `server.androidScheme: "http"` + `cleartext: true` +

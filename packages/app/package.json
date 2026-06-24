@@ -10,7 +10,9 @@
     "build:web": "vite build",
     "preview": "vite preview",
     "cap:sync": "cap sync",
-    "cap:android": "cap open android"
+    "cap:android": "cap open android",
+    "apk": "vite build && cap sync android && cd android && gradlew.bat assembleDebug",
+    "apk:install": "adb install -r android/app/build/outputs/apk/debug/app-debug.apk"
   },
   "dependencies": {
     "@capacitor/core": "^6.0.0",
