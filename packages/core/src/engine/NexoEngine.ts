@@ -104,6 +104,7 @@ export class NexoEngine {
         this.movieMap = new Map(this.movies.map(m => [m.id, m]));
         this.seriesMap = new Map(this.series.map(s => [s.id, s]));
         this._groupsMemo = null;
+        this._logoIdx = null;
         this.buildTitleIndexes();
     }
 
@@ -243,15 +244,47 @@ export class NexoEngine {
         return NexoEngine._LOGO_PALETTE[h % NexoEngine._LOGO_PALETTE.length];
     }
 
+    // Índice de logos do PRÓPRIO provedor (sem banco externo): por nome-base e por
+    // 1ª palavra (marca). Permite emprestar o logo de um canal irmão pra quem não tem.
+    private _logoIdx: { byBase: Map<string, string>; byWord: Map<string, string> } | null = null;
+    private _ensureLogoIndex() {
+        if (this._logoIdx) return this._logoIdx;
+        const byBase = new Map<string, string>();
+        const wordCount = new Map<string, Map<string, number>>();
+        for (const c of this.channels) {
+            const logo = (c.attributes?.['tvg-logo'] || c.logo || '').trim();
+            if (!logo) continue;
+            const base = this._channelBaseName(c.name).toLowerCase();
+            if (base && !byBase.has(base)) byBase.set(base, logo);
+            const word = (base.split(' ')[0] || '');
+            if (word.length >= 3) {
+                if (!wordCount.has(word)) wordCount.set(word, new Map());
+                const m = wordCount.get(word)!; m.set(logo, (m.get(logo) || 0) + 1);
+            }
+        }
+        const byWord = new Map<string, string>();
+        for (const [w, m] of wordCount) { let best = ''; let max = 0; for (const [lg, n] of m) if (n > max) { max = n; best = lg; } if (best) byWord.set(w, best); }
+        this._logoIdx = { byBase, byWord };
+        return this._logoIdx;
+    }
+    private _findProviderLogo(name: string): string | null {
+        const idx = this._ensureLogoIndex();
+        const base = this._channelBaseName(name).toLowerCase();
+        if (idx.byBase.has(base)) return idx.byBase.get(base)!;
+        const w = base.split(' ')[0] || '';
+        if (w.length >= 3 && idx.byWord.has(w)) return idx.byWord.get(w)!;
+        return null;
+    }
+
     deriveFallbackLogoUrl(item: any) {
-        const logoAttr = item.attributes?.['tvg-logo'] || item.logo;
-        if (logoAttr && logoAttr.trim()) {
-            let finalUrl = logoAttr.trim();
+        const own = item.attributes?.['tvg-logo'] || item.logo;
+        // 1) logo do próprio canal; 2) logo de um irmão da mesma marca (índice do provedor)
+        let finalUrl = (own && own.trim()) ? own.trim() : this._findProviderLogo(item.name || '');
+        if (finalUrl) {
             if (finalUrl.includes('imgur.com')) finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
-            // logo do provedor, renderizado uniforme (quadrado, contido, fundo escuro)
             return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&bg=1b1b22`;
         }
-        // Sem logo → card colorido gerado (cor determinística pelo nome) — sem banco.
+        // 3) sem nada → card colorido gerado (cor determinística pelo nome) — sem banco.
         const base = this._channelBaseName(item.name) || item.name || 'TV';
         return `https://placehold.co/320x320/${this._logoCardColor(base)}/FFFFFF.png?text=${encodeURIComponent(base)}&font=oswald`;
     }
