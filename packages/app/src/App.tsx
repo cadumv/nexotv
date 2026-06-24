@@ -1253,8 +1253,8 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
 
     const favList = Object.values(loadFav()).filter((m: any) => m.type === 'movie' || m.type === 'series');
     const rows: { id: string; name: string; metas: any[] }[] = [];
-    if (favList.length) rows.push({ id: '__fav', name: '★ Minha lista', metas: favList });
     if (cwAll.length) rows.push({ id: '__cw', name: 'Continuar assistindo', metas: cwAll });
+    if (favList.length) rows.push({ id: '__fav', name: '★ Minha lista', metas: favList });
     if (featured.length) rows.push({ id: '__feat', name: '⭐ Em alta · Bem avaliados', metas: featured });
 
     return (
