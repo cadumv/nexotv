@@ -6,7 +6,7 @@
  */
 import { HttpClient } from '../http/HttpClient';
 import { AddonConfig } from '../types';
-import { parseEPG } from '../parsers/epgParser';
+import { parseEPG, parseEpgChannelNames } from '../parsers/epgParser';
 
 export interface XtreamOpts {
     idPrefix: string;
@@ -22,6 +22,7 @@ export interface XtreamData {
     movies: any[];
     series: any[];
     epgData: Record<string, any[]>;
+    epgNames?: Record<string, string>;
 }
 
 const DEFAULT_FETCH_TIMEOUT = 30000;
@@ -143,6 +144,7 @@ export async function fetchXtreamData(http: HttpClient, config: AddonConfig, opt
             if (epgResp && epgResp.ok) {
                 const epgContent = await epgResp.text();
                 out.epgData = await parseEPG(epgContent, { maxBytes: opts.epgMaxBytes, log: opts.log });
+                out.epgNames = parseEpgChannelNames(epgContent);
             }
         } catch { /* EPG opcional */ }
     }

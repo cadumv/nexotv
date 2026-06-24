@@ -7,7 +7,7 @@ import { HttpClient } from '../http/HttpClient';
 import { AddonConfig } from '../types';
 import { createCacheKey, idPrefixFromCacheKey } from '../config/cacheKey';
 import { stripAccents, normalizeTitle, cleanForSearch, compact } from '../text/normalize';
-import { parseEPG, getCurrentProgram, getUpcomingPrograms } from '../parsers/epgParser';
+import { parseEPG, parseEpgChannelNames, normChannelName, getCurrentProgram, getUpcomingPrograms } from '../parsers/epgParser';
 import { parseM3U } from '../parsers/m3uParser';
 import { fetchTmdbMeta, resolveTmdbTitles, resolveImdbTitle } from '../meta/titleMatch';
 import { fetchSofascoreAgenda, AgendaConfig } from '../agenda/sofascoreAgenda';
@@ -54,6 +54,7 @@ export class NexoEngine {
     series: any[] = [];
     seriesMap = new Map<string, any>();
     epgData: Record<string, any[]> = {};
+    epgNames: Record<string, string> = {}; // nome normalizado → id do canal (casar EPG por nome)
 
     movieTitleIndex = new Map<string, any>();
     movieTitleYearIndex = new Map<string, any>();
@@ -105,6 +106,7 @@ export class NexoEngine {
             this.movies = data.movies;
             this.series = data.series;
             this.epgData = data.epgData;
+            this.epgNames = (data as any).epgNames || {};
         }
         this.channelMap = new Map(this.channels.map(c => [c.id, c]));
         this.movieMap = new Map(this.movies.map(m => [m.id, m]));
@@ -133,7 +135,7 @@ export class NexoEngine {
         if (epgSrc) {
             try {
                 const er = await this.http.get(epgSrc, { headers: ua, timeoutMs: this.options.epgFetchTimeoutMs ?? 60000 });
-                if (er && er.ok) this.epgData = await parseEPG(await er.text(), { maxBytes: this.options.epgMaxBytes });
+                if (er && er.ok) { const txt = await er.text(); this.epgData = await parseEPG(txt, { maxBytes: this.options.epgMaxBytes }); this.epgNames = parseEpgChannelNames(txt); }
             } catch { /* EPG opcional */ }
         }
     }
@@ -452,11 +454,27 @@ export class NexoEngine {
         return channels.find(c => ((c.attributes?.['tvg-logo'] || c.logo || '').trim())) || channels[0] || {};
     }
 
+    // Resolve um id de EPG que EXISTE no epgData: tenta o id direto do canal
+    // (tvg-id/epg_channel_id) e, se não bater, casa pelo NOME (display-name xmltv).
+    _resolveEpgId(ch: any): string {
+        const direct = ch?.attributes?.['tvg-id'] || ch?.attributes?.['tvg-name'] || ch?.epg_channel_id;
+        if (direct && this.epgData[direct]) return direct;
+        const byName = this.epgNames[normChannelName(ch?.name || '')];
+        if (byName && this.epgData[byName]) return byName;
+        return '';
+    }
+    // Acha o programa atual de um grupo testando todas as variantes (id direto/nome).
+    _groupCurrent(variants: any[]): { epgId: string; cur: any } {
+        for (const v of variants) { const id = this._resolveEpgId(v); if (id) { const c = getCurrentProgram(this.epgData, id, this.epgOffset); if (c) return { epgId: id, cur: c }; } }
+        // sem programa agora: devolve o 1º id válido (p/ "a seguir")
+        for (const v of variants) { const id = this._resolveEpgId(v); if (id) return { epgId: id, cur: null }; }
+        return { epgId: '', cur: null };
+    }
+
     generateChannelGroupPreview(g: any) {
         const rep = this._repWithLogo(g.channels);
         const chain = this.logoCandidates(rep);
-        const epgId = (g.channels[0] || {}).attributes?.['tvg-id'] || (g.channels[0] || {}).epg_channel_id;
-        const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
+        const cur = this._groupCurrent(g.channels).cur;
         const agora = cur ? `Agora: ${stripAccents(cur.title)}` : undefined;
         return {
             id: this._encodeChannelGroupId(g.base), type: 'tv', name: g.base,
@@ -471,14 +489,9 @@ export class NexoEngine {
         if (!key) return null;
         const { base, variants } = this._channelsForGroupKey(key);
         if (!variants.length) return null;
-        const rep = variants[0];
         const logoRep = this._repWithLogo(variants);
-        const epgIdOf = (v: any) => v?.attributes?.['tvg-id'] || v?.attributes?.['tvg-name'] || v?.epg_channel_id;
-        // Procura o programa atual entre TODAS as variantes do grupo (o representante
-        // nem sempre tem EPG); usa o epgId da 1ª variante que tiver programa agora.
-        let epgId = epgIdOf(rep);
-        let cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
-        if (!cur) for (const v of variants) { const id = epgIdOf(v); const c = id && getCurrentProgram(this.epgData, id, this.epgOffset); if (c) { cur = c; epgId = id; break; } }
+        // Programa atual entre TODAS as variantes (id direto ou casado por nome).
+        const { epgId, cur } = this._groupCurrent(variants);
         const upcoming = getUpcomingPrograms(this.epgData, epgId, 4, this.epgOffset);
         const hhmm = (dt: any) => dt ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : '';
         let description = stripAccents(base);
@@ -491,7 +504,7 @@ export class NexoEngine {
         const chain = this.logoCandidates(logoRep);
         return {
             id, type: 'tv', name: base, poster: chain[0], background: chain[0], posterChain: chain, posterShape: 'square',
-            description, genres: rep.category ? [rep.category] : ['Live TV'], runtime: 'Live',
+            description, genres: variants[0]?.category ? [variants[0].category] : ['Live TV'], runtime: 'Live',
         };
     }
 
@@ -836,7 +849,7 @@ export class NexoEngine {
         if (id.startsWith(`ser${this.idPrefix}_`)) return this.getSeriesMeta(id);
         const item = this.channelMap.get(id);
         if (!item) return null;
-        const epgId = item.attributes?.['tvg-id'] || item.attributes?.['tvg-name'];
+        const epgId = this._resolveEpgId(item);
         const current = getCurrentProgram(this.epgData, epgId, this.epgOffset);
         const upcoming = getUpcomingPrograms(this.epgData, epgId, 3, this.epgOffset);
         const hhmm = (dt: any) => dt ? `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}` : '';

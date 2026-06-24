@@ -13,6 +13,31 @@ function pickText(v: any): string {
     return String(v);
 }
 
+/** Normaliza nome de canal p/ casar EPG por nome (minúsculo, sem tags [..], só
+ *  alfanumérico). "GLOBO NEWS [FHD]" e "GloboNews" → "globonews". */
+export function normChannelName(s: string): string {
+    return String(s || '').toLowerCase().replace(/\[[^\]]*\]/g, '').replace(/\(.*?\)/g, '').replace(/[^a-z0-9]+/g, '');
+}
+
+/** Índice nome→id dos <channel> do XMLTV (regex leve, sem parse completo). Permite
+ *  casar canais que não têm epg_channel_id pelo nome. Primeiro nome vence. */
+export function parseEpgChannelNames(content: string): Record<string, string> {
+    const names: Record<string, string> = {};
+    if (!content) return names;
+    const re = /<channel\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/channel>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content))) {
+        const id = m[1];
+        const dnRe = /<display-name[^>]*>([^<]+)<\/display-name>/g;
+        let dn: RegExpExecArray | null;
+        while ((dn = dnRe.exec(m[2]))) {
+            const key = normChannelName(dn[1]);
+            if (key && !names[key]) names[key] = id;
+        }
+    }
+    return names;
+}
+
 export interface ParseEpgOptions {
     /** Tamanho máximo do conteúdo (bytes). Acima disso, retorna {}. Default 50 MB. */
     maxBytes?: number;
