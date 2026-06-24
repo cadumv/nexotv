@@ -340,7 +340,7 @@ function GamesView({ metas, loading, onOpen }: { metas: any[]; loading: boolean;
 function ChannelsView({ engine, cats, flat, catFirst, loading }: {
     engine: NexoEngine; cats: { id: string; name: string; count: number; sample?: any }[]; flat: FlatItem[]; catFirst: Record<string, number>; loading: boolean;
 }) {
-    const [showCats, setShowCats] = useState(true);
+    const [mode, setMode] = useState<'cats' | 'channels'>('cats'); // a lista mostra categorias ou canais
     const [idx, setIdx] = useState(-1);          // índice (no flat) do canal selecionado
     const [url, setUrl] = useState('');
     const [title, setTitle] = useState('');
@@ -369,7 +369,7 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
         const h = catFirst[catId];
         let fc = -1;
         for (let i = h + 1; i < flat.length; i++) { if (flat[i].kind === 'chan') { fc = i; break; } if (flat[i].kind === 'header') break; }
-        setShowCats(false);
+        setMode('channels');
         if (fc >= 0) select(fc, true);
         setTimeout(() => stageRef.current?.focus(), 30);
     };
@@ -382,7 +382,7 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
     const onKey = (e: React.KeyboardEvent) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setShowCats(true); }
+        else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); setMode('cats'); }
     };
 
     const label = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
@@ -391,40 +391,36 @@ function ChannelsView({ engine, cats, flat, catFirst, loading }: {
     if (loading && !flat.length) return <div className="status">Carregando canais…</div>;
     if (!loading && !flat.length) return <div className="status">Nenhum canal (provedor fora do ar?)</div>;
 
-    if (showCats) {
-        return (
-            <div className="chan-cats">
-                <h2 className="chan-h">Canais — escolha uma categoria</h2>
-                <div className="cat-grid">
-                    {cats.map(c => (
-                        <button key={c.id} className="cat-card" onClick={() => pickCat(c.id)}>
-                            <span className="cat-name">{label(c.name)}</span>
-                            <span className="cat-count">{c.count} canais</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-        );
-    }
-
+    const inCats = mode === 'cats';
     return (
         <div className="chan-live" ref={stageRef} tabIndex={0} onKeyDown={onKey}>
             <aside className="chan-list">
                 <div className="chan-list-head">
-                    <button className="back" onClick={() => setShowCats(true)}>‹ Categorias</button>
-                    <span className="cur-cat">{curCatName}</span>
+                    <button className={`back${inCats ? ' on' : ''}`} onClick={() => setMode(inCats ? 'channels' : 'cats')}>
+                        {inCats ? '‹ Voltar' : '☰ Categorias'}
+                    </button>
+                    <span className="cur-cat">{inCats ? 'Escolha uma categoria' : curCatName}</span>
                 </div>
                 <div className="chan-scroll" ref={scrollRef}>
-                    {flat.map((f, i) => f.kind === 'header' ? (
-                        <div className="chan-divider" key={'h' + i}><span>{label(f.name)}</span></div>
+                    {inCats ? (
+                        cats.map(c => (
+                            <button key={c.id} className={`cat-row${flat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)}>
+                                <span className="cat-row-name">{label(c.name)}</span>
+                                <span className="cat-row-count">{c.count}</span>
+                            </button>
+                        ))
                     ) : (
-                        <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
-                            <img className="chan-ico" alt="" loading="lazy"
-                                src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
-                                onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
-                            <span className="chan-name">{f.meta.name}</span>
-                        </button>
-                    ))}
+                        flat.map((f, i) => f.kind === 'header' ? (
+                            <div className="chan-divider" key={'h' + i}><span>{label(f.name)}</span></div>
+                        ) : (
+                            <button key={i} data-i={i} className={`chan-row${i === idx ? ' on' : ''}`} onClick={() => select(i, true)}>
+                                <img className="chan-ico" alt="" loading="lazy"
+                                    src={(Array.isArray(f.meta.posterChain) && f.meta.posterChain[0]) || f.meta.poster || cardFor(f.meta.name)}
+                                    onError={(e) => { const c = cardFor(f.meta.name); if (e.currentTarget.src !== c) e.currentTarget.src = c; }} />
+                                <span className="chan-name">{f.meta.name}</span>
+                            </button>
+                        ))
+                    )}
                 </div>
             </aside>
             <main className="chan-stage">
