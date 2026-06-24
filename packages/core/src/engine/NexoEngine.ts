@@ -235,16 +235,25 @@ export class NexoEngine {
 
     // ===================== CHANNELS =====================
 
+    // Paleta escura (Netflix-ish) p/ o card gerado quando o canal não tem logo.
+    static _LOGO_PALETTE = ['1f3a5f', '3a1f5f', '5f1f2e', '1f5f3a', '5f4a1f', '2e1f5f', '1f5f5a', '5f1f4a', '24304a', '402a2a'];
+    _logoCardColor(name: string) {
+        let h = 0; const s = name || 'TV';
+        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+        return NexoEngine._LOGO_PALETTE[h % NexoEngine._LOGO_PALETTE.length];
+    }
+
     deriveFallbackLogoUrl(item: any) {
-        let finalUrl: string;
         const logoAttr = item.attributes?.['tvg-logo'] || item.logo;
-        if (logoAttr && logoAttr.trim()) finalUrl = logoAttr;
-        else finalUrl = `https://placehold.co/320x320/2b2b2b/FFFFFF.png?text=${encodeURIComponent(item.name || 'TV')}`;
-        if (finalUrl.startsWith('http') && !finalUrl.includes('wsrv.nl') && !finalUrl.includes('placehold.co')) {
+        if (logoAttr && logoAttr.trim()) {
+            let finalUrl = logoAttr.trim();
             if (finalUrl.includes('imgur.com')) finalUrl = `https://proxy.duckduckgo.com/iu/?u=${encodeURIComponent(finalUrl)}`;
-            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&bg=2b2b2b`;
+            // logo do provedor, renderizado uniforme (quadrado, contido, fundo escuro)
+            return `https://wsrv.nl/?url=${encodeURIComponent(finalUrl)}&w=320&h=320&fit=contain&we&bg=1b1b22`;
         }
-        return finalUrl;
+        // Sem logo → card colorido gerado (cor determinística pelo nome) — sem banco.
+        const base = this._channelBaseName(item.name) || item.name || 'TV';
+        return `https://placehold.co/320x320/${this._logoCardColor(base)}/FFFFFF.png?text=${encodeURIComponent(base)}&font=oswald`;
     }
 
     generateMetaPreview(item: any) {
@@ -261,13 +270,23 @@ export class NexoEngine {
 
     // Nome-base do canal: tira [tags] e tokens de qualidade soltos → 1 entrada por
     // emissora ("ADULT SWIM [FHD][H265]" e "ADULT SWIM [SD]" → "ADULT SWIM").
+    // Redes com MUITAS afiliadas regionais → agrupa todas sob a marca ("GLOBO TV
+    // BAHIA", "GLOBO SP" → "Globo"). Reduz o "monte de Globo/SBT" no grid.
+    static NETWORK_BRANDS = ['GLOBO', 'SBT', 'RECORD', 'BAND', 'REDE TV', 'REDETV', 'CNT', 'TV BRASIL'];
+
     _channelBaseName(name: string) {
-        const base = (name || '')
+        let base = (name || '')
             .replace(/\[[^\]]*\]/g, ' ')                              // [FHD], [H265]…
             .replace(/\b(FHD|HD|SD|4K|UHD|H265|H264|HEVC|FULLHD)\b/gi, ' ')
             .replace(/\s+/g, ' ').trim()
             .replace(/\s+\d{1,2}$/, '')                               // família numerada: "Apple TV 4" → "Apple TV"
             .trim();
+        const up = base.toUpperCase();
+        for (const b of NexoEngine.NETWORK_BRANDS) {
+            if (up === b || up.startsWith(b + ' ')) {                 // 1ª palavra = marca de rede
+                return b.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');
+            }
+        }
         return base;
     }
 
@@ -286,33 +305,39 @@ export class NexoEngine {
 
     private _groupsMemo: any[] | null = null;
 
-    /** Agrupa canais por emissora (dedup de qualidades). Cada grupo carrega as variantes. */
+    /** Agrupa canais por emissora (dedup de qualidades + famílias + redes), IGNORANDO
+     * categoria — assim "Globo" vira UM tile só (não um por categoria). A categoria
+     * do grupo é a mais comum entre as variantes (define em qual fileira ele entra). */
     getChannelGroups(src?: any[]) {
         if (!src && this._groupsMemo) return this._groupsMemo;
         const channels = src || this.channels;
-        const groups = new Map<string, { key: string; base: string; category: any; attributes: any; channels: any[] }>();
+        const groups = new Map<string, { base: string; catCount: Map<string, number>; attributes: any; channels: any[] }>();
         for (const c of channels) {
             const base = this._channelBaseName(c.name) || c.name;
-            const key = `${base.toLowerCase()}|${c.category || ''}`;
-            if (!groups.has(key)) groups.set(key, { key: `${base}|${c.category || ''}`, base, category: c.category, attributes: c.attributes, channels: [] });
-            groups.get(key)!.channels.push(c);
+            const key = base.toLowerCase();
+            if (!groups.has(key)) groups.set(key, { base, catCount: new Map(), attributes: c.attributes, channels: [] });
+            const g = groups.get(key)!;
+            g.channels.push(c);
+            const cat = c.category || (c.attributes && c.attributes['group-title']) || '';
+            if (cat) g.catCount.set(cat, (g.catCount.get(cat) || 0) + 1);
         }
         const out: any[] = [];
         for (const g of groups.values()) {
             g.channels.sort((a, b) => this._channelQualityRank(b) - this._channelQualityRank(a));
-            // expõe campos p/ os filtros de categoria/busca do getCatalog
-            out.push({ ...g, name: g.base });
+            // categoria mais frequente entre as variantes
+            let category = ''; let max = 0;
+            for (const [cat, n] of g.catCount) if (n > max) { max = n; category = cat; }
+            out.push({ base: g.base, name: g.base, category, attributes: g.attributes, channels: g.channels });
         }
         if (!src) this._groupsMemo = out;
         return out;
     }
 
     private _channelsForGroupKey(key: string) {
-        const sep = key.lastIndexOf('|');
-        const base = (sep >= 0 ? key.slice(0, sep) : key);
-        const cat = sep >= 0 ? key.slice(sep + 1) : '';
+        // key = nome-base do grupo (sem categoria — agrupa a marca toda).
+        const base = key;
         const baseLc = base.toLowerCase();
-        const all = this.channels.filter(c => this._channelBaseName(c.name).toLowerCase() === baseLc && (c.category || '') === cat);
+        const all = this.channels.filter(c => this._channelBaseName(c.name).toLowerCase() === baseLc);
         // 1 opção por sub-canal (ex: "Premiere 2"), na MELHOR qualidade — sem repetir
         // FHD/HD/SD. subKey = nome sem tags de qualidade (mantém o número).
         const subKey = (n: string) => (n || '').replace(/\[[^\]]*\]/g, ' ').replace(/\b(FHD|HD|SD|4K|UHD|H265|H264|HEVC|FULLHD)\b/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -320,7 +345,7 @@ export class NexoEngine {
         const best = new Map<string, any>();
         for (const c of all) { const k = subKey(c.name); if (!best.has(k)) best.set(k, c); }
         const variants = [...best.values()].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }));
-        return { base, cat, variants };
+        return { base, variants };
     }
 
     generateChannelGroupPreview(g: any) {
@@ -330,7 +355,7 @@ export class NexoEngine {
         const cur = getCurrentProgram(this.epgData, epgId, this.epgOffset);
         const agora = cur ? `Agora: ${stripAccents(cur.title)}` : undefined;
         return {
-            id: this._encodeChannelGroupId(g.key), type: 'tv', name: g.base,
+            id: this._encodeChannelGroupId(g.base), type: 'tv', name: g.base,
             poster: logo, background: logo, posterShape: 'square',
             description: agora, releaseInfo: agora,
             genres: g.category ? [g.category] : ['Live TV'],

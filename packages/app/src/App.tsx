@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine } from './engineHost';
 
@@ -58,14 +59,15 @@ function App() {
     const [rows, setRows] = useState<Row[]>([]);
     const [status, setStatus] = useState('');
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
+    const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null);
 
-    const play = (url: string) => { window.open(url, '_blank'); };
+    const play = (url: string, title: string) => { setPicker(null); setPlaying({ url, title }); };
 
     const openItem = useCallback(async (meta: any) => {
         if (!engine) return;
         const streams = await engine.getStreams(meta.id);
         if (!streams.length) { setStatus('Sem stream disponível'); setTimeout(() => setStatus(''), 2500); return; }
-        if (streams.length === 1) { play(streams[0].url); return; }
+        if (streams.length === 1) { play(streams[0].url, meta.name); return; }
         // Várias opções (qualidades / canais da família) → mostra o seletor.
         setPicker({
             title: meta.name,
@@ -152,13 +154,52 @@ function App() {
                         <p className="modal-sub">Escolha a opção</p>
                         <div className="opts">
                             {picker.options.map((o, i) => (
-                                <button key={i} className="opt" onClick={() => { play(o.url); setPicker(null); }}>{o.label}</button>
+                                <button key={i} className="opt" onClick={() => play(o.url, o.label)}>{o.label}</button>
                             ))}
                         </div>
                         <button className="modal-close" onClick={() => setPicker(null)}>fechar</button>
                     </div>
                 </div>
             )}
+
+            {playing && <Player url={playing.url} title={playing.title} onClose={() => setPlaying(null)} />}
+        </div>
+    );
+}
+
+/** Player em tela cheia: HLS via hls.js; senão <video> nativo; fallback "abrir externo".
+ *  No APK, um plugin ExoPlayer nativo pode substituir isto (ver README). */
+function Player({ url, title, onClose }: { url: string; title: string; onClose: () => void }) {
+    const ref = useRef<HTMLVideoElement>(null);
+    const [err, setErr] = useState(false);
+    useEffect(() => {
+        const v = ref.current; if (!v) return;
+        const isHls = /\.m3u8(\?|$)|\.ts(\?|$)/i.test(url) || url.includes('/live/');
+        let hls: Hls | null = null;
+        if (isHls && Hls.isSupported()) {
+            hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+            hls.loadSource(url);
+            hls.attachMedia(v);
+            hls.on(Hls.Events.ERROR, (_e, data) => { if (data.fatal) setErr(true); });
+        } else {
+            v.src = url; // mp4 / Safari-HLS nativo
+            v.addEventListener('error', () => setErr(true), { once: true });
+        }
+        const p = v.play(); if (p && p.catch) p.catch(() => { });
+        return () => { try { hls?.destroy(); } catch { } };
+    }, [url]);
+    return (
+        <div className="player" onClick={onClose}>
+            <div className="player-box" onClick={e => e.stopPropagation()}>
+                <div className="player-bar"><span>{title}</span><button onClick={onClose}>✕</button></div>
+                <video ref={ref} controls autoPlay playsInline className="player-video" />
+                {err && (
+                    <div className="player-err">
+                        Não consegui tocar aqui.
+                        <button onClick={() => window.open(url, '_blank')}>Abrir externo</button>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

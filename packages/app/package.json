@@ -13,14 +13,15 @@
     "cap:android": "cap open android"
   },
   "dependencies": {
-    "@nexotv/core": "workspace:*",
     "@capacitor/core": "^6.0.0",
+    "@nexotv/core": "workspace:*",
+    "hls.js": "^1.6.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.0.0",
     "@capacitor/android": "^6.0.0",
+    "@capacitor/cli": "^6.0.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",

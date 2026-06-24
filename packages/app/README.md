@@ -42,6 +42,16 @@ cd android && ./gradlew assembleDebug      # -> app/build/outputs/apk/debug/app-
 # 3. instalar na TV:
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-Player: trocar o webview `window.open` por plugin de vídeo nativo (ExoPlayer)
-pros streams IPTV/VOD tocarem bem na TV.
+## Player (cascata de fallbacks)
+Atual (`App.tsx` → `Player`):
+1. **hls.js** no `<video>` pra HLS (.m3u8/.ts/`/live/`) — funciona no navegador (notebook)
+   e em WebView.
+2. `<video>` nativo (mp4 / Safari-HLS).
+3. Fallback "**Abrir externo**" se falhar.
+
+**Pro APK (Android TV), o melhor é ExoPlayer nativo** (HLS/.ts/DASH + AC3/Dolby +
+controle remoto). Plugins recomendados (pesquisa): `@capgo/capacitor-video-player`
+(HLS/DASH) ou `wako-capacitor-video-player` (ExoPlayer/Media3 + DRM). Integrar como
+camada 0 da cascata: tenta ExoPlayer nativo → cai pro hls.js → externo. Fica pra
+quando montar o APK final (precisa device pra validar .ts/AC3 na TV).
 Setup: a tela de login (App.tsx) já existe; o `sofascoreAgendaUrl` (Worker) entra ali.
