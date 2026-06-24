@@ -41,11 +41,25 @@ export function attachAdaptive(video: HTMLVideoElement, url: string, onFatal: ()
     let destroyed = false;
     let hls: Hls | null = null;
     let onErr: (() => void) | null = null;
+    let watchdog: any = null;
+    let progressed = false;
+    let probes: Array<[string, () => void]> = [];
 
+    const clearWatch = () => { if (watchdog) { clearTimeout(watchdog); watchdog = null; } };
     const cleanup = () => {
+        clearWatch();
         if (hls) { try { hls.destroy(); } catch { /* noop */ } hls = null; }
         if (onErr) { video.removeEventListener('error', onErr); onErr = null; }
+        probes.forEach(([ev, fn]) => video.removeEventListener(ev, fn)); probes = [];
         try { video.removeAttribute('src'); video.load(); } catch { /* noop */ }
+    };
+
+    // Watchdog: se a engine conecta mas NÃO começa a tocar (trava silenciosa, comum
+    // no player nativo de várias TVs), em 8s consideramos falha e caímos pra próxima.
+    const onProgress = () => { if (video.currentTime > 0.1 || !video.paused) { progressed = true; clearWatch(); } };
+    const armWatchdog = () => {
+        clearWatch();
+        watchdog = setTimeout(() => { if (!destroyed && !progressed) advance(); }, 8000);
     };
 
     const play = () => { const p = video.play(); if (p && p.catch) p.catch(() => { /* autoplay */ }); };
@@ -85,7 +99,14 @@ export function attachAdaptive(video: HTMLVideoElement, url: string, onFatal: ()
         if (destroyed) return;
         cleanup();
         if (ai >= attempts.length) { onFatal(); return; }
+        progressed = false;
         attempts[ai++]();
+        // Sinais de "tocou de verdade" + watchdog uniformes pra qualquer engine.
+        const pl: [string, () => void] = ['playing', onProgress];
+        const tu: [string, () => void] = ['timeupdate', onProgress];
+        video.addEventListener('playing', onProgress); video.addEventListener('timeupdate', onProgress);
+        probes.push(pl, tu);
+        armWatchdog();
     };
 
     advance(); // inicia a 1ª tentativa
