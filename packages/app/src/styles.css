@@ -62,7 +62,7 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 /* ---- Canais ao vivo (lista + player) ---- */
 /* Seções "ao vivo" ocupam a tela inteira (sem rolar a página) — player + lista +
    opções sempre visíveis, como numa TV. O stage preenche o que sobra do topbar. */
-.home.channels, .home.games { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.home.channels, .home.games, .home.vod { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 .chan-live { display: grid; grid-template-columns: 340px 1fr; gap: 0; flex: 1; min-height: 0; }
 .chan-live:focus { outline: none; }
 .chan-list { display: flex; flex-direction: column; border-right: 1px solid #1d1d24; min-height: 0; background: #0e0e13; }
@@ -143,6 +143,23 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 /* Nome só aparece no foco/hover (visual mais limpo). */
 .tile-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 12px; padding: 8px 6px 6px; background: linear-gradient(transparent, rgba(0,0,0,.9)); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity .15s; }
 .tile:hover .tile-name, .tile:focus .tile-name { opacity: 1; }
+
+/* ---- Filmes e Séries: board (Stremio) + fileiras (Netflix) ---- */
+.vod-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vod-board { position: relative; flex: 0 0 auto; height: 44vh; min-height: 300px; background-size: cover; background-position: center 18%; display: flex; align-items: flex-end; transition: background-image .25s ease; }
+.vb-grad { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(11,11,15,.96) 0%, rgba(11,11,15,.72) 38%, rgba(11,11,15,.15) 70%, transparent 100%), linear-gradient(0deg, #0b0b0f 2%, transparent 42%); }
+.vb-info { position: relative; padding: 0 40px 22px; max-width: 60%; }
+.vb-kind { display: inline-block; font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #e50914; margin-bottom: 6px; }
+.vb-title { font-size: clamp(26px, 3.6vw, 46px); font-weight: 800; margin: 0 0 8px; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.85); }
+.vb-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 14px; color: #cfcfd4; font-weight: 600; margin-bottom: 10px; }
+.vb-imdb { background: #f5c518; color: #000; font-weight: 900; padding: 2px 8px; border-radius: 5px; font-size: 13px; }
+.vb-genres { color: #9aa0ad; }
+.vb-desc { font-size: 14.5px; color: #dfe2e8; margin: 0 0 10px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 720px; }
+.vb-cast { font-size: 13px; color: #aab0bd; margin-bottom: 14px; }
+.vb-cast b { color: #e6e6ea; font-weight: 700; }
+.vb-play { background: #fff; color: #000; border: 0; border-radius: 8px; padding: 11px 26px; font-size: 16px; font-weight: 800; cursor: pointer; transition: background .15s, color .15s; }
+.vb-play:hover, .vb-play:focus { background: #e50914; color: #fff; outline: none; }
+.vod-rows { flex: 1; min-height: 0; overflow-y: auto; padding-top: 6px; }
 
 /* ---- Hero / banner de destaque ---- */
 .hero { position: relative; height: 56vh; min-height: 320px; background-size: cover; background-position: center 20%; display: flex; align-items: flex-end; margin-bottom: 6px; }

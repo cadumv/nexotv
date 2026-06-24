@@ -236,27 +236,9 @@ function App() {
 
             {section === 'vod' && !engine && <div className="connecting"><span className="spin" /> Conectando ao provedor…</div>}
             {section === 'vod' && engine && (
-                vodLoading && !movieRows.length && !seriesRows.length ? <div className="connecting"><span className="spin" /> Carregando catálogo…</div> : (
-                    <>
-                        {cwAll.length > 0 && (
-                            <section className="row"><h2>Continuar Assistindo</h2>
-                                <div className="tiles">{cwAll.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
-                            </section>
-                        )}
-                        {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
-                        {movieRows.map(row => (
-                            <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
-                            </section>
-                        ))}
-                        {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
-                        {seriesRows.map(row => (
-                            <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => openItem(m)} />)}</div>
-                            </section>
-                        ))}
-                    </>
-                )
+                vodLoading && !movieRows.length && !seriesRows.length
+                    ? <div className="connecting"><span className="spin" /> Carregando catálogo…</div>
+                    : <VodView engine={engine} movieRows={movieRows} seriesRows={seriesRows} cwAll={cwAll} onOpen={openItem} />
             )}
             {section === 'channels' && (engine
                 ? <ChannelsView engine={engine} cats={chanCats} flat={chanFlat} loading={chanLoading} />
@@ -826,7 +808,111 @@ function cardFor(name: string) {
     const pal = ['1f3a5f', '3a1f5f', '5f1f2e', '1f5f3a', '5f4a1f', '2e1f5f', '1f5f5a', '5f1f4a', '24304a', '402a2a'];
     return `https://placehold.co/320x320/${pal[h % pal.length]}/FFFFFF.png?text=${encodeURIComponent(s)}&font=oswald`;
 }
-function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
+// Nota IMDb numérica (string "7.8" → 7.8) p/ ordenar destaques.
+function ratingNum(m: any): number { const r = parseFloat(m?.imdbRating); return isFinite(r) ? r : 0; }
+
+/** Filmes e Séries estilo Netflix + board estilo Stremio: ao focar um título,
+ *  o board do topo mostra backdrop, nota IMDb, ano, duração, gêneros, sinopse e
+ *  elenco (detalhes sob demanda, com cache). Fileira "Em alta" + auto-rotação. */
+function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
+    engine: NexoEngine; movieRows: Row[]; seriesRows: Row[]; cwAll: any[]; onOpen: (m: any) => void;
+}) {
+    const [focused, setFocused] = useState<any | null>(null);
+    const [detail, setDetail] = useState<any | null>(null);
+    const cache = useRef<Map<string, any>>(new Map());
+    const timer = useRef<any>(null);
+    const interacted = useRef(false);
+    const [spin, setSpin] = useState(0); // índice da auto-rotação (billboard ocioso)
+
+    // Destaques: bem avaliados (nota desc), únicos. Semeia o board e a fileira.
+    const featured = useMemo(() => {
+        const all = [...movieRows, ...seriesRows].flatMap(r => r.metas);
+        const seen = new Set<string>(); const list: any[] = [];
+        all.filter(m => ratingNum(m) > 0).sort((a, b) => ratingNum(b) - ratingNum(a))
+            .forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); list.push(m); } });
+        // Se quase nada tem nota, cai pros primeiros do catálogo (mais novos).
+        if (list.length < 6) for (const m of all) { if (!seen.has(m.id)) { seen.add(m.id); list.push(m); } if (list.length >= 12) break; }
+        return list.slice(0, 14);
+    }, [movieRows, seriesRows]);
+
+    // Busca detalhes (backdrop/elenco/duração) sob demanda, com cache + debounce.
+    const focus = useCallback((m: any) => {
+        interacted.current = true; setFocused(m);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(async () => {
+            if (cache.current.has(m.id)) { setDetail(cache.current.get(m.id)); return; }
+            setDetail(null);
+            try { const d = await engine.getDetailedMeta(m.id); if (d) { cache.current.set(m.id, d); setDetail(d); } }
+            catch { /* mantém o que veio do catálogo */ }
+        }, 180);
+    }, [engine]);
+
+    // Billboard ocioso: roda entre os destaques a cada 6s até o usuário interagir.
+    useEffect(() => {
+        if (!featured.length) return;
+        const t = setInterval(() => { if (!interacted.current) setSpin(s => (s + 1) % Math.min(5, featured.length)); }, 6000);
+        return () => clearInterval(t);
+    }, [featured]);
+
+    // Item exibido no board: o focado; senão o destaque da rotação.
+    const board = focused || featured[spin] || featured[0] || null;
+    // Detalhe enriquecido só vale se for do mesmo item.
+    const D = detail && board && detail.id === board.id ? { ...board, ...detail } : board;
+    useEffect(() => { if (board && !focused) { /* pré-carrega o do billboard */ if (cache.current.has(board.id)) setDetail(cache.current.get(board.id)); } }, [board, focused]);
+
+    if (!board) return <div className="connecting"><span className="spin" /> Carregando catálogo…</div>;
+
+    const year = D.releaseInfo || '';
+    const genres: string[] = Array.isArray(D.genres) ? D.genres : [];
+    const cast: string[] = Array.isArray(D.cast) ? D.cast : [];
+    const bg = D.background || D.poster;
+
+    const rows: { id: string; name: string; metas: any[] }[] = [];
+    if (cwAll.length) rows.push({ id: '__cw', name: 'Continuar assistindo', metas: cwAll });
+    if (featured.length) rows.push({ id: '__feat', name: '⭐ Em alta · Bem avaliados', metas: featured });
+
+    return (
+        <div className="vod-view">
+            <div className="vod-board" style={bg ? { backgroundImage: `url("${bg}")` } : undefined}>
+                <div className="vb-grad" />
+                <div className="vb-info">
+                    <span className="vb-kind">{D.type === 'series' ? 'SÉRIE' : 'FILME'}</span>
+                    <h1 className="vb-title">{D.name}</h1>
+                    <div className="vb-meta">
+                        {ratingNum(D) > 0 && <span className="vb-imdb">★ {D.imdbRating}</span>}
+                        {year && <span>{year}</span>}
+                        {D.runtime && <span>{D.runtime} min</span>}
+                        {genres.length > 0 && <span className="vb-genres">{genres.slice(0, 3).join(' · ')}</span>}
+                    </div>
+                    {D.description && <p className="vb-desc">{D.description}</p>}
+                    {cast.length > 0 && <div className="vb-cast"><b>Elenco:</b> {cast.slice(0, 4).join(', ')}</div>}
+                    <button className="vb-play" onClick={() => onOpen(D)}>▶ Assistir</button>
+                </div>
+            </div>
+            <div className="vod-rows">
+                {rows.map(r => (
+                    <section className="row" key={r.id}><h2>{r.name}</h2>
+                        <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                    </section>
+                ))}
+                {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
+                {movieRows.map(row => (
+                    <section className="row" key={row.id}><h2>{row.name}</h2>
+                        <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                    </section>
+                ))}
+                {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
+                {seriesRows.map(row => (
+                    <section className="row" key={row.id}><h2>{row.name}</h2>
+                        <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} />)}</div>
+                    </section>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function Tile({ meta, onPlay, onFocusItem }: { meta: any; onPlay: () => void; onFocusItem?: (m: any) => void }) {
     const shape = shapeFor(meta);
     // Cascata de logos (banco → próprio → irmão → card). Se uma falhar, o onError
     // avança pra próxima sozinho — nunca fica vazio.
@@ -862,7 +948,9 @@ function Tile({ meta, onPlay }: { meta: any; onPlay: () => void }) {
         } catch { /* tainted (sem CORS) → mantém contain */ }
     };
     return (
-        <button className={`tile ${shape}${fill ? ' fill' : ''}`} onClick={onPlay} aria-label={meta.name}>
+        <button className={`tile ${shape}${fill ? ' fill' : ''}`} onClick={onPlay} aria-label={meta.name}
+            onFocus={onFocusItem ? () => onFocusItem(meta) : undefined}
+            onMouseEnter={onFocusItem ? () => onFocusItem(meta) : undefined}>
             <img src={src} alt={meta.name} loading="lazy" crossOrigin={isProxyLogo ? 'anonymous' : undefined}
                 onError={onErr} onLoad={onLoad} />
             <span className="tile-name">{meta.name}</span>
