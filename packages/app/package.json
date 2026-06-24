@@ -4,6 +4,7 @@
   "description": "Rajada — app (UI estilo Netflix + engine do core, empacotado via Capacitor)",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -12,7 +13,29 @@
     "cap:sync": "cap sync",
     "cap:android": "cap open android",
     "apk": "vite build && cap sync android && cd android && .\\gradlew.bat assembleDebug",
-    "apk:install": "\"C:/Users/caduv/asdk/platform-tools/adb.exe\" install -r android/app/build/outputs/apk/debug/app-debug.apk"
+    "apk:install": "\"C:/Users/caduv/asdk/platform-tools/adb.exe\" install -r android/app/build/outputs/apk/debug/app-debug.apk",
+    "desktop": "vite build && node electron/launch.cjs",
+    "desktop:build": "vite build && electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.rajada.desktop",
+    "productName": "Rajada",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
   },
   "dependencies": {
     "@capacitor/core": "^6.0.0",
@@ -27,6 +50,8 @@
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3",
     "typescript": "5.9.3",
     "vite": "^5.4.0"
   }
