@@ -28,8 +28,7 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .pick-row2 { margin-top: -2px; }
 /* overlay cinematográfico sobre o backdrop (legibilidade do título) */
 .pc-grad { position: absolute; inset: 0; pointer-events: none;
-    background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.45) 38%, rgba(0,0,0,.05) 62%, transparent 100%),
-                linear-gradient(90deg, rgba(0,0,0,.55) 0%, transparent 45%); }
+    background: linear-gradient(0deg, rgba(0,0,0,.98) 0%, rgba(0,0,0,.92) 22%, rgba(0,0,0,.55) 42%, rgba(0,0,0,.1) 62%, transparent 80%); }
 .pc-foot { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 24px 22px; display: flex; flex-direction: column; gap: 2px; text-align: left; }
 .pc-label { font-size: 30px; font-weight: 900; letter-spacing: .3px; color: #fff; line-height: 1.05; text-shadow: 0 2px 14px rgba(0,0,0,.95); }
 .pc-sub2 { font-size: 14px; font-weight: 600; color: #d6d6db; text-shadow: 0 1px 8px rgba(0,0,0,.9); }

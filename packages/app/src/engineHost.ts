@@ -48,6 +48,18 @@ export async function tmdbBackdrop(query: string): Promise<string | null> {
 // GitHub), pra os Jogos preencherem sem o usuário digitar.
 const DEFAULT_AGENDA = (import.meta as any).env?.VITE_AGENDA_URL || null;
 
+/** Pôster cinematográfico (RETRATO 2:3) do TMDB por busca — pra cards de pôster. */
+export async function tmdbPoster(query: string): Promise<string | null> {
+    if (!DEFAULT_TMDB) return null;
+    try {
+        const r = await fetch(`https://api.themoviedb.org/3/search/multi?api_key=${DEFAULT_TMDB}&language=pt-BR&include_adult=false&query=${encodeURIComponent(query)}`);
+        if (!r.ok) return null;
+        const j = await r.json();
+        const hit = (j.results || []).find((x: any) => x.poster_path);
+        return hit ? `https://image.tmdb.org/t/p/w500${hit.poster_path}` : null;
+    } catch { return null; }
+}
+
 export async function createEngine(config: AddonConfig, options: EngineOptions): Promise<NexoEngine> {
     const http = await makeHttp();
     // Banco de logos (iptv-org BR, bundlado) como fallback automático + TMDB padrão.

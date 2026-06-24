@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
-import { createEngine, tmdbBackdrop } from './engineHost';
+import { createEngine, tmdbPoster } from './engineHost';
 
 const LS_KEY = 'rajada.config.v1';
 
@@ -205,8 +205,9 @@ function App() {
                     else if (metas[0]) vod = (await engine.getTmdbPosterFor(metas[0].id).catch(() => null)) || undefined;
                 }
             } catch { /* fallback gradiente */ }
-            const tv = (await tmdbBackdrop('telejornal').catch(() => null)) || (await tmdbBackdrop('television studio').catch(() => null)) || undefined;
-            const live = (await tmdbBackdrop('futebol').catch(() => null)) || (await tmdbBackdrop('soccer stadium').catch(() => null)) || undefined;
+            // pôster retrato (encaixa no card 2:3)
+            const tv = (await tmdbPoster('telejornal').catch(() => null)) || (await tmdbPoster('jornal nacional').catch(() => null)) || undefined;
+            const live = (await tmdbPoster('futebol').catch(() => null)) || (await tmdbPoster('pele').catch(() => null)) || undefined;
             if (!dead) setPickArt({ vod, tv, live });
         })();
         return () => { dead = true; };
