@@ -661,6 +661,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
     const [watch] = useState<Record<string, number>>(loadWatch); // snapshot do histórico (não reembaralha na sessão)
     const [favVer, setFavVer] = useState(0);                     // versão dos favoritos (reativo ao favoritar)
     const [epg, setEpg] = useState<{ now: string; next: string }>({ now: '', next: '' });
+    const [topCat, setTopCat] = useState('');   // categoria no topo da rolagem (cabeçalho "sticky" via barra fixa externa)
     const scrollRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const timer = useRef<any>(null);
@@ -757,6 +758,25 @@ function ChannelsView({ engine, cats, flat, loading }: {
         }, 140);
     };
 
+    // "Sticky" sem buraco: a categoria do topo da rolagem é refletida na BARRA FIXA
+    // externa (.chan-list-head), não num elemento dentro da lista. Os divisores ficam
+    // inline (não-sticky) → impossível gerar vão/corte. Calcula qual seção está no topo.
+    const recalcTopCat = useCallback(() => {
+        const sc = scrollRef.current; if (!sc) return;
+        const top = sc.getBoundingClientRect().top + 1;
+        const divs = sc.querySelectorAll<HTMLElement>('.chan-divider[data-h]');
+        let name = '';
+        for (const d of Array.from(divs)) {
+            if (d.getBoundingClientRect().top <= top) name = d.textContent || '';
+            else break;
+        }
+        if (!name && divs.length) name = divs[0].textContent || '';
+        setTopCat(prev => (prev === name ? prev : name));
+    }, []);
+
+    // Recalcula ao trocar a lista e logo após montar.
+    useEffect(() => { const t = setTimeout(recalcTopCat, 60); return () => clearTimeout(t); }, [vflat, recalcTopCat, mode]);
+
     const move = (dir: 1 | -1) => {
         const pos = chanIdxs.indexOf(idx);
         const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
@@ -782,9 +802,9 @@ function ChannelsView({ engine, cats, flat, loading }: {
                     <button className={`back${inCats ? ' on' : ''}`} onClick={() => setMode(inCats ? 'channels' : 'cats')}>
                         {inCats ? '‹ Voltar' : '☰ Categorias'}
                     </button>
-                    <span className="cur-cat">{inCats ? 'Escolha uma categoria' : curCatName}</span>
+                    <span className="cur-cat">{inCats ? 'Escolha uma categoria' : (topCat || curCatName)}</span>
                 </div>
-                <div className="chan-scroll" ref={scrollRef}>
+                <div className="chan-scroll" ref={scrollRef} onScroll={recalcTopCat}>
                     {inCats ? (
                         vcats.map(c => (
                             <button key={c.id} className={`cat-row${vflat[idx]?.catId === c.id ? ' on' : ''}`} onClick={() => pickCat(c.id)}>
