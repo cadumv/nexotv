@@ -913,6 +913,12 @@ function LivePlayer({ sources, title, options, onPick }: {
     const [dead, setDead] = useState(false);  // todas as fontes falharam
     const [loading, setLoading] = useState(false); // bufferizando (feedback ao zapear)
     const [fs, setFs] = useState(false);      // tela cheia (CSS — funciona em qualquer TV)
+    const [showCtrl, setShowCtrl] = useState(true);  // barra de controles visível (auto-some)
+    const [paused, setPaused] = useState(false);
+    const [muted, setMuted] = useState(false);
+    const showRef = useRef(true);
+    const hideTimer = useRef<any>(null);
+    const ctrlRef = useRef<HTMLDivElement>(null);
     srcRef.current = sources;
 
     // Toca a fonte i. hls.js é uma instância PERSISTENTE: trocar de canal/fonte só faz
@@ -981,23 +987,56 @@ function LivePlayer({ sources, title, options, onPick }: {
 
     // Destrói a instância ao desmontar.
     useEffect(() => () => { try { hlsRef.current?.destroy(); } catch { } hlsRef.current = null; }, []);
-    // Em tela cheia, Esc/Voltar sai da tela cheia (e NÃO volta pras categorias).
+    // ---- Controlador da barra de tela cheia (some sozinha, reaparece em qualquer ação) ----
+    const setShow = useCallback((v: boolean) => { showRef.current = v; setShowCtrl(v); }, []);
+    const reveal = useCallback(() => {
+        setShow(true);
+        clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => setShow(false), 4000);  // some após 4s parado
+    }, [setShow]);
+    const ctrlButtons = () => Array.from(ctrlRef.current?.querySelectorAll<HTMLElement>('button') || []);
+    const focusCtrl = (idx = 0) => { const b = ctrlButtons(); (b[Math.max(0, Math.min(b.length - 1, idx))])?.focus(); };
+    const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
+    const togglePlay = () => { const v = ref.current; if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
+    const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
+
+    // Mantém os ícones de play/mudo sincronizados com o vídeo.
     useEffect(() => {
-        if (!fs) return;
+        const v = ref.current; if (!v) return;
+        const sync = () => { setPaused(v.paused); setMuted(v.muted); };
+        v.addEventListener('play', sync); v.addEventListener('pause', sync); v.addEventListener('volumechange', sync);
+        return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', sync); };
+    }, []);
+
+    // Em tela cheia: barra some/reaparece; ←→ navega entre os botões; Voltar sai;
+    // tudo confinado à barra (não vaza pra lista atrás). Fora dela, foco volta ao player.
+    useEffect(() => {
+        if (!fs) {
+            setShow(true); clearTimeout(hideTimer.current);
+            const t = setTimeout(() => boxRef.current?.focus(), 60);
+            return () => clearTimeout(t);
+        }
+        reveal();
+        const t = setTimeout(() => focusCtrl(0), 60);
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); setFs(false); }
+            if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); e.stopPropagation(); setFs(false); return; }
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'NumpadEnter') {
+                if (!showRef.current) { e.preventDefault(); e.stopPropagation(); reveal(); focusCtrl(0); }
+                else reveal();   // deixa o botão focado disparar
+                return;
+            }
+            e.stopPropagation();  // confina: stageNav/spatialMove não agem na lista de trás
+            if (!showRef.current) { e.preventDefault(); reveal(); focusCtrl(0); return; }  // 1ª tecla só revela
+            reveal();
+            if (e.key === 'ArrowRight') { e.preventDefault(); moveCtrl(1); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); moveCtrl(-1); }
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); }
         };
+        const onMove = () => reveal();
         window.addEventListener('keydown', onKey, true);
-        return () => window.removeEventListener('keydown', onKey, true);
-    }, [fs]);
-    // Leva o foco pro controle certo ao entrar/sair (navegação por D-pad).
-    useEffect(() => {
-        const t = setTimeout(() => {
-            if (fs) (boxRef.current?.querySelector('.live-ov-exit') as HTMLElement | null)?.focus();
-            else boxRef.current?.focus();
-        }, 60);
-        return () => clearTimeout(t);
-    }, [fs]);
+        window.addEventListener('mousemove', onMove, true);
+        return () => { clearTimeout(t); clearTimeout(hideTimer.current); window.removeEventListener('keydown', onKey, true); window.removeEventListener('mousemove', onMove, true); };
+    }, [fs, reveal, setShow]);
     const trying = alt > 0 && !dead;
     const active = sources[0];
     const canFs = !!sources.length;
@@ -1008,13 +1047,13 @@ function LivePlayer({ sources, title, options, onPick }: {
     };
     return (
         <div ref={boxRef}
-            className={`live-player${fs ? ' fs' : ''}`}
+            className={`live-player${fs ? ' fs' : ''}${fs && !showCtrl ? ' nocursor' : ''}`}
             tabIndex={0}
             role="button"
             aria-label="Player — OK para tela cheia"
             onKeyDown={onBoxKey}
-            onClick={() => { if (!fs && canFs) setFs(true); }}>
-            <video ref={ref} controls={fs} autoPlay playsInline className="live-video" />
+            onClick={() => { if (fs) reveal(); else if (canFs) setFs(true); }}>
+            <video ref={ref} autoPlay playsInline className="live-video" />
             {/* Anel de foco SOBRE o vídeo (box-shadow no container fica escondido atrás dele). */}
             {!fs && <div className="live-ring" aria-hidden="true" />}
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
@@ -1024,17 +1063,17 @@ function LivePlayer({ sources, title, options, onPick }: {
             {trying && <div className="live-fallback">Fonte instável — tentando alternativa {alt + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
             {fs && (
-                <div className="live-ov">
-                    <span className="live-ov-title">{title}</span>
-                    {options && options.length > 1 && (
-                        <div className="live-ov-opts">
-                            {options.map((o, k) => (
-                                <button key={k} className={`now-opt${o.urls[0] === active ? ' on' : ''}`}
-                                    onClick={() => onPick?.(o.urls)}>{o.label}</button>
-                            ))}
-                        </div>
-                    )}
-                    <button className="live-ov-exit" onClick={() => setFs(false)}>✕ Sair (Voltar)</button>
+                <div className={`live-ov${showCtrl ? '' : ' hidden'}`}>
+                    <div className="live-ov-top"><span className="live-ov-title">{title}</span></div>
+                    <div className="live-ctrl" ref={ctrlRef}>
+                        <button className="live-cbtn" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}>{paused ? '▶' : '❚❚'}</button>
+                        <button className="live-cbtn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}>{muted ? '🔇' : '🔊'}</button>
+                        {options && options.length > 1 && options.map((o, k) => (
+                            <button key={k} className={`now-opt${o.urls[0] === active ? ' on' : ''}`}
+                                onClick={() => { onPick?.(o.urls); reveal(); }}>{o.label}</button>
+                        ))}
+                        <button className="live-cbtn live-cbtn-exit" onClick={() => setFs(false)} aria-label="Sair da tela cheia">✕ Sair</button>
+                    </div>
                 </div>
             )}
         </div>

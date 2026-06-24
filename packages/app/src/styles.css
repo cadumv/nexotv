@@ -124,12 +124,22 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .live-player.fs { position: fixed; inset: 0; z-index: 9999; }
 .live-player.fs .live-video { object-fit: contain; }
 /* Overlay em tela cheia: título + fontes (navegáveis por controle) + sair. */
-.live-ov { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; display: flex; align-items: center; gap: 14px; padding: 16px 20px; background: linear-gradient(0deg, rgba(0,0,0,.85), rgba(0,0,0,0)); }
-.live-ov-title { color: #fff; font-weight: 800; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.live-ov-opts { display: flex; gap: 8px; flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; }
-.live-ov-opts::-webkit-scrollbar { display: none; }
-.live-ov-exit { flex: 0 0 auto; background: #1c1c24; color: #fff; border: 1px solid #2a2a32; border-radius: 999px; padding: 8px 16px; font-weight: 700; cursor: pointer; }
-.live-ov-exit:hover, .live-ov-exit:focus { background: #e50914; border-color: #e50914; outline: none; }
+/* Interface própria do player em tela cheia: topo (título) + barra de controles
+   embaixo. Some sozinha após 4s e reaparece a qualquer ação. */
+.live-ov { position: absolute; inset: 0; z-index: 7; pointer-events: none; opacity: 1; transition: opacity .25s; }
+.live-ov.hidden { opacity: 0; }
+.live-ov.hidden .live-ctrl { pointer-events: none; }
+.live-player.nocursor { cursor: none; }
+.live-ov-top { position: absolute; left: 0; right: 0; top: 0; padding: 22px 26px; background: linear-gradient(180deg, rgba(0,0,0,.8), rgba(0,0,0,0)); }
+.live-ov-title { color: #fff; font-weight: 800; font-size: 22px; }
+.live-ctrl { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 18px 24px 22px; background: linear-gradient(0deg, rgba(0,0,0,.88), rgba(0,0,0,0)); pointer-events: auto; overflow-x: auto; scrollbar-width: none; }
+.live-ctrl::-webkit-scrollbar { display: none; }
+.live-cbtn { flex: 0 0 auto; background: rgba(28,28,36,.9); color: #fff; border: 1px solid #2a2a32; border-radius: 10px; min-width: 46px; height: 46px; padding: 0 14px; font-size: 17px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.live-cbtn:hover, .live-cbtn:focus { background: #e50914; border-color: #e50914; outline: none; transform: scale(1.06); }
+.live-cbtn-exit { margin-left: auto; }
+/* Os botões de fonte (now-opt) dentro da barra ganham realce de foco igual. */
+.live-ctrl .now-opt { height: 46px; }
+.live-ctrl .now-opt:focus { transform: scale(1.06); }
 .live-fallback { position: absolute; bottom: 14px; left: 14px; background: rgba(0,0,0,.72); color: #ffd34d; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 8px; }
 .chan-now { flex: 0 0 auto; padding: 10px 18px 12px; background: #0b0b0f; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .now-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
