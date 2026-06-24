@@ -160,12 +160,18 @@ body, #root { margin: 0; background: #0b0b0f; color: #f5f5f7; font-family: 'Sego
 .vb-play { background: #fff; color: #000; border: 0; border-radius: 8px; padding: 11px 26px; font-size: 16px; font-weight: 800; cursor: pointer; transition: background .15s, color .15s; }
 .vb-play:hover, .vb-play:focus { background: #e50914; color: #fff; outline: none; }
 .vod-rows { flex: 1; min-height: 0; overflow-y: auto; padding-top: 0; }
-/* Barra de categorias (chips) — fixa no topo das fileiras, rola seguindo o foco. */
-.vod-cats { position: sticky; top: 0; z-index: 4; display: flex; gap: 9px; padding: 12px 40px; background: linear-gradient(#0b0b0f 70%, rgba(11,11,15,.85)); overflow-x: auto; scrollbar-width: none; }
-.vod-cats::-webkit-scrollbar { display: none; }
+/* Barra de categorias — fixa no topo das fileiras. Linha 1 = principais,
+   linha 2 = subcategorias da principal selecionada. Cada uma rola s/ o foco. */
+.vod-catbar { position: sticky; top: 0; z-index: 4; background: linear-gradient(#0b0b0f 78%, rgba(11,11,15,.9)); padding: 10px 0 6px; }
+.vod-cats, .vod-subcats { display: flex; gap: 9px; padding: 4px 40px; overflow-x: auto; scrollbar-width: none; }
+.vod-cats::-webkit-scrollbar, .vod-subcats::-webkit-scrollbar { display: none; }
 .vod-cat { flex: 0 0 auto; background: #1a1a22; color: #cfcfd4; border: 1px solid #2a2a32; border-radius: 999px; padding: 7px 16px; font-size: 13.5px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s; }
 .vod-cat:hover, .vod-cat:focus { border-color: #e50914; outline: none; }
 .vod-cat.on { background: #e50914; color: #fff; border-color: #e50914; }
+/* Subcategorias: menores e mais discretas (hierarquia visual). */
+.vod-sub { flex: 0 0 auto; background: transparent; color: #b6bac4; border: 1px solid #2a2a32; border-radius: 999px; padding: 5px 13px; font-size: 12.5px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, border-color .15s; }
+.vod-sub:hover, .vod-sub:focus { border-color: #16b39b; color: #fff; outline: none; }
+.vod-sub.on { background: #16b39b; color: #04211c; border-color: #16b39b; font-weight: 700; }
 /* Grade da categoria selecionada (pôsteres com quebra de linha). */
 .vod-cat-sec { padding: 8px 40px 30px; }
 .vod-cat-count { font-size: 13px; color: #8a8a93; font-weight: 600; margin-left: 8px; }

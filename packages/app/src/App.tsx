@@ -823,33 +823,52 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const timer = useRef<any>(null);
     const interacted = useRef(false);
     const [spin, setSpin] = useState(0); // índice da auto-rotação (billboard ocioso)
-    const [cat, setCat] = useState<string>('__all');     // categoria selecionada (chips)
-    const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // categorias buscadas sob demanda
+    const [mainCat, setMainCat] = useState<string>('__all'); // categoria principal
+    const [subCat, setSubCat] = useState<string>('__all');   // subcategoria (id do catálogo)
+    const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // buscadas sob demanda
     const [loadingCat, setLoadingCat] = useState(false);
 
-    // Todas as categorias do catálogo (filmes + séries) → botões.
-    const catList = useMemo(() => {
+    // Árvore de categorias do catálogo. Nome "Filmes | Ação" vira principal
+    // "Filmes" + sub "Ação"; sem "|" vira uma principal própria (com selfId).
+    const tree = useMemo(() => {
         const cats = ((engine.getManifest() as any).catalogs || []) as any[];
-        const mk = (c: any) => ({ id: c.id, name: c.name, type: c.type });
-        const movies = cats.filter(c => c.id === 'nexotv_vod' || c.id.startsWith('nexotv_vod_g_')).map(mk);
-        const series = cats.filter(c => c.id === 'nexotv_series' || c.id.startsWith('nexotv_series_g_')).map(mk);
-        return [...movies, ...series];
+        const defs = cats.filter(c => /^nexotv_(vod|series)(_g_|$)/.test(c.id));
+        const map = new Map<string, { name: string; selfId?: string; type: string; subs: { name: string; id: string }[] }>();
+        for (const c of defs) {
+            const parts = String(c.name).split('|').map(s => s.trim());
+            const main = parts[0] || c.name; const sub = parts.slice(1).join(' | ');
+            if (!map.has(main)) map.set(main, { name: main, type: c.type, subs: [] });
+            const node = map.get(main)!;
+            if (sub) node.subs.push({ name: sub, id: c.id }); else node.selfId = c.id;
+        }
+        return [...map.values()];
     }, [engine]);
 
-    // Ao escolher uma categoria não carregada ainda, busca sob demanda.
+    const node = mainCat === '__all' ? null : tree.find(n => n.name === mainCat) || null;
+    // Catálogo efetivo selecionado (sub escolhida → ela; senão o "pai", senão a 1ª sub).
+    const selId = mainCat === '__all' ? null
+        : (subCat !== '__all' ? subCat : (node?.selfId || node?.subs[0]?.id || null));
+
+    const metasOf = (id: string | null) => {
+        if (!id) return [];
+        const r = [...movieRows, ...seriesRows].find(x => x.id === id);
+        return r ? r.metas : (loaded[id] || []);
+    };
+
+    // Busca o catálogo selecionado sob demanda, se ainda não carregado.
     useEffect(() => {
-        if (cat === '__all') return;
-        const inRows = [...movieRows, ...seriesRows].some(r => r.id === cat);
-        if (inRows || loaded[cat]) return;
-        const def = catList.find(c => c.id === cat);
-        if (!def) return;
+        if (!selId) return;
+        const inRows = [...movieRows, ...seriesRows].some(r => r.id === selId);
+        if (inRows || loaded[selId]) return;
         let dead = false; setLoadingCat(true);
-        engine.getCatalog({ type: def.type, id: def.id })
-            .then(({ metas }: any) => { if (!dead) setLoaded(p => ({ ...p, [cat]: metas || [] })); })
-            .catch(() => { if (!dead) setLoaded(p => ({ ...p, [cat]: [] })); })
+        engine.getCatalog({ type: node?.type || 'movie', id: selId })
+            .then(({ metas }: any) => { if (!dead) setLoaded(p => ({ ...p, [selId]: metas || [] })); })
+            .catch(() => { if (!dead) setLoaded(p => ({ ...p, [selId]: [] })); })
             .finally(() => { if (!dead) setLoadingCat(false); });
         return () => { dead = true; };
-    }, [cat]);
+    }, [selId]);
+
+    const pickMain = (name: string) => { setMainCat(name); setSubCat('__all'); };
 
     // Destaques: bem avaliados (nota desc), únicos. Semeia o board e a fileira.
     const featured = useMemo(() => {
@@ -917,13 +936,23 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                 </div>
             </div>
             <div className="vod-rows">
-                <div className="vod-cats">
-                    <button className={`vod-cat${cat === '__all' ? ' on' : ''}`} onClick={() => setCat('__all')} onFocus={focusScroll}>Tudo</button>
-                    {catList.map(c => (
-                        <button key={c.id} className={`vod-cat${cat === c.id ? ' on' : ''}`} onClick={() => setCat(c.id)} onFocus={focusScroll}>{c.name}</button>
-                    ))}
+                <div className="vod-catbar">
+                    <div className="vod-cats">
+                        <button className={`vod-cat${mainCat === '__all' ? ' on' : ''}`} onClick={() => pickMain('__all')} onFocus={focusScroll}>Tudo</button>
+                        {tree.map(n => (
+                            <button key={n.name} className={`vod-cat${mainCat === n.name ? ' on' : ''}`} onClick={() => pickMain(n.name)} onFocus={focusScroll}>{n.name}</button>
+                        ))}
+                    </div>
+                    {node && node.subs.length > 0 && (
+                        <div className="vod-subcats">
+                            {node.selfId && <button className={`vod-sub${subCat === '__all' ? ' on' : ''}`} onClick={() => setSubCat('__all')} onFocus={focusScroll}>Todos</button>}
+                            {node.subs.map(s => (
+                                <button key={s.id} className={`vod-sub${subCat === s.id ? ' on' : ''}`} onClick={() => setSubCat(s.id)} onFocus={focusScroll}>{s.name}</button>
+                            ))}
+                        </div>
+                    )}
                 </div>
-                {cat === '__all' ? (
+                {mainCat === '__all' ? (
                     <>
                         {rows.map(r => (
                             <section className="row" key={r.id}><h2>{r.name}</h2>
@@ -944,11 +973,11 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                         ))}
                     </>
                 ) : (() => {
-                    const r = [...movieRows, ...seriesRows].find(x => x.id === cat);
-                    const metas = r ? r.metas : (loaded[cat] || []);
+                    const metas = metasOf(selId);
                     if (loadingCat && !metas.length) return <div className="connecting"><span className="spin" /> Carregando categoria…</div>;
                     if (!metas.length) return <div className="status">Nada nesta categoria.</div>;
-                    const name = (catList.find(c => c.id === cat) || {} as any).name || '';
+                    const subName = subCat !== '__all' ? (node?.subs.find(s => s.id === subCat)?.name || '') : '';
+                    const name = subName ? `${mainCat} · ${subName}` : mainCat;
                     return (
                         <section className="vod-cat-sec">
                             <h2 className="sec-head">{name} <span className="vod-cat-count">{metas.length}</span></h2>
