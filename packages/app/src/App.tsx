@@ -74,6 +74,7 @@ function App() {
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
     const [playing, setPlaying] = useState<{ url: string; title: string; key?: string; resumeFrom?: number } | null>(null);
     const [details, setDetails] = useState<any | null>(null); // tela de detalhes (filme/série)
+    const [search, setSearch] = useState(false);              // overlay de busca
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
     const homeRef = useRef<HTMLDivElement>(null);
     const builtRef = useRef({ vod: false, channels: false, games: false });
@@ -232,7 +233,10 @@ function App() {
                     <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
                     <button className={section === 'games' ? 'on' : ''} onClick={() => setSection('games')}>Jogos ao vivo</button>
                 </nav>
-                <button className="logout" onClick={logout}>sair</button>
+                <div className="topbar-right">
+                    <button className="search-btn" onClick={() => setSearch(true)} aria-label="Buscar">🔍</button>
+                    <button className="logout" onClick={logout}>sair</button>
+                </div>
             </header>
 
             {status && <div className="status">{status}</div>}
@@ -263,6 +267,10 @@ function App() {
                 </div>
             )}
 
+            {search && engine && <SearchView engine={engine}
+                onClose={() => setSearch(false)}
+                onDetails={(m) => { setSearch(false); openDetails(m); }}
+                onPlayChannel={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }} />}
             {details && engine && <DetailsView engine={engine} meta={details} onClose={() => setDetails(null)} onPlay={(u, t, k, r) => { setDetails(null); play(u, t, k, r); }} />}
             {playing && <Player url={playing.url} title={playing.title} contentKey={playing.key} resumeFrom={playing.resumeFrom} onClose={() => setPlaying(null)} />}
         </div>
@@ -851,6 +859,57 @@ function fmtTime(s: number): string {
     s = Math.max(0, Math.floor(s || 0));
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
     return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(ss).padStart(2, '0')}`;
+}
+
+/** Busca (overlay): filmes, séries e canais por nome (debounce). Filme/série
+ *  abrem detalhes; canal toca direto. */
+function SearchView({ engine, onClose, onDetails, onPlayChannel }: {
+    engine: NexoEngine; onClose: () => void; onDetails: (m: any) => void; onPlayChannel: (m: any) => void;
+}) {
+    const [q, setQ] = useState('');
+    const [res, setRes] = useState<{ movies: any[]; series: any[]; channels: any[] }>({ movies: [], series: [], channels: [] });
+    const [loading, setLoading] = useState(false);
+    const timer = useRef<any>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
+    useEffect(() => { inputRef.current?.focus(); }, []);
+    useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
+    useEffect(() => {
+        clearTimeout(timer.current);
+        const term = q.trim();
+        if (term.length < 2) { setRes({ movies: [], series: [], channels: [] }); setLoading(false); return; }
+        timer.current = setTimeout(async () => {
+            setLoading(true);
+            const get = (type: string, id: string) => engine.getCatalog({ type, id, extra: { search: term } }).then((r: any) => r.metas || []).catch(() => []);
+            const [movies, series, channels] = await Promise.all([get('movie', 'nexotv_vod'), get('series', 'nexotv_series'), get('tv', 'iptv_channels')]);
+            setRes({ movies: movies.slice(0, 24), series: series.slice(0, 24), channels: channels.slice(0, 24) });
+            setLoading(false);
+        }, 320);
+    }, [q]);
+    const total = res.movies.length + res.series.length + res.channels.length;
+    const Sec = (title: string, metas: any[], onItem: (m: any) => void) => metas.length > 0 && (
+        <section className="row"><h2>{title} <span className="vod-cat-count">{metas.length}</span></h2>
+            <div className="tiles">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onItem(m)} />)}</div>
+        </section>
+    );
+    return (
+        <div className="search-ov">
+            <div className="search-bar">
+                <span className="search-ico">🔍</span>
+                <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar filmes, séries e canais…" />
+                <button className="search-close" onClick={onClose}>✕</button>
+            </div>
+            <div className="search-results">
+                {q.trim().length < 2 ? <div className="status">Digite ao menos 2 letras…</div>
+                    : loading && !total ? <div className="connecting"><span className="spin" /> Buscando…</div>
+                        : total === 0 ? <div className="status">Nada encontrado para “{q.trim()}”.</div>
+                            : <>
+                                {Sec('Filmes', res.movies, onDetails)}
+                                {Sec('Séries', res.series, onDetails)}
+                                {Sec('Canais', res.channels, onPlayChannel)}
+                            </>}
+            </div>
+        </div>
+    );
 }
 
 /** Tela de detalhes (overlay) de filme/série: backdrop, nota, sinopse, elenco.
