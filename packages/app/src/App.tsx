@@ -267,7 +267,7 @@ function App() {
                 </div>
             )}
 
-            {search && engine && <SearchView engine={engine}
+            {search && engine && <SearchView engine={engine} context={section}
                 onClose={() => setSearch(false)}
                 onDetails={(m) => { setSearch(false); openDetails(m); }}
                 onPlayChannel={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }} />}
@@ -863,8 +863,8 @@ function fmtTime(s: number): string {
 
 /** Busca (overlay): filmes, séries e canais por nome (debounce). Filme/série
  *  abrem detalhes; canal toca direto. */
-function SearchView({ engine, onClose, onDetails, onPlayChannel }: {
-    engine: NexoEngine; onClose: () => void; onDetails: (m: any) => void; onPlayChannel: (m: any) => void;
+function SearchView({ engine, context, onClose, onDetails, onPlayChannel }: {
+    engine: NexoEngine; context: Section; onClose: () => void; onDetails: (m: any) => void; onPlayChannel: (m: any) => void;
 }) {
     const [q, setQ] = useState('');
     const [res, setRes] = useState<{ movies: any[]; series: any[]; channels: any[] }>({ movies: [], series: [], channels: [] });
@@ -886,11 +886,18 @@ function SearchView({ engine, onClose, onDetails, onPlayChannel }: {
         }, 320);
     }, [q]);
     const total = res.movies.length + res.series.length + res.channels.length;
-    const Sec = (title: string, metas: any[], onItem: (m: any) => void) => metas.length > 0 && (
-        <section className="row"><h2>{title} <span className="vod-cat-count">{metas.length}</span></h2>
+    const Sec = (key: string, title: string, metas: any[], onItem: (m: any) => void) => metas.length > 0 && (
+        <section className="row" key={key}><h2>{title} <span className="vod-cat-count">{metas.length}</span></h2>
             <div className="tiles">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onItem(m)} />)}</div>
         </section>
     );
+    // Ordem das linhas conforme a seção em que a busca foi aberta (a relevante primeiro).
+    const blocks: Record<string, any> = {
+        channels: () => Sec('channels', 'Canais', res.channels, onPlayChannel),
+        movies: () => Sec('movies', 'Filmes', res.movies, onDetails),
+        series: () => Sec('series', 'Séries', res.series, onDetails),
+    };
+    const order = context === 'channels' ? ['channels', 'movies', 'series'] : ['movies', 'series', 'channels'];
     return (
         <div className="search-ov">
             <div className="search-bar">
@@ -902,11 +909,7 @@ function SearchView({ engine, onClose, onDetails, onPlayChannel }: {
                 {q.trim().length < 2 ? <div className="status">Digite ao menos 2 letras…</div>
                     : loading && !total ? <div className="connecting"><span className="spin" /> Buscando…</div>
                         : total === 0 ? <div className="status">Nada encontrado para “{q.trim()}”.</div>
-                            : <>
-                                {Sec('Filmes', res.movies, onDetails)}
-                                {Sec('Séries', res.series, onDetails)}
-                                {Sec('Canais', res.channels, onPlayChannel)}
-                            </>}
+                            : <>{order.map(k => blocks[k]())}</>}
             </div>
         </div>
     );
