@@ -72,7 +72,8 @@ function navFocusables(): HTMLElement[] {
         if (stage) root = stage;
     }
     return Array.from(root.querySelectorAll<HTMLElement>(sel))
-        .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
+        // tabindex="-1" (ex.: logo RAJADA) NÃO é alvo de D-pad, mesmo sendo <button>.
+        .filter(el => el.tabIndex !== -1 && el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
 }
 
 // Pilha de "voltar": o botão Voltar do controle (na TV, via @capacitor/app) executa o
@@ -119,6 +120,13 @@ function spatialMove(dir: string): boolean {
     return false;
 }
 
+// Leva o foco pras abas do topo (Filmes/Canais/Jogos) — usado quando ↑ no player
+// não tem pra onde ir dentro do stage.
+function focusTopbar() {
+    const b = (document.querySelector('.tabs-top button.on') || document.querySelector('.tabs-top button')) as HTMLElement | null;
+    b?.focus();
+}
+
 // Navegação por D-pad no stage de Canais/Jogos (controle remoto):
 //  - foco na LISTA (stage): ↑↓ zapeia o canal/jogo, → vai pro player, Voltar = onBack.
 //  - foco no PLAYER/PROVEDORES: setas = navegação espacial (↓ do player chega nos
@@ -132,11 +140,18 @@ function stageNav(e: React.KeyboardEvent, stage: HTMLElement | null, move: (d: 1
         else if (e.key === 'ArrowRight') { e.preventDefault(); (stage?.querySelector('.live-player') as HTMLElement | null)?.focus(); }
         else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); onBack(); }
     } else {
-        if (e.key === 'ArrowLeft') { e.preventDefault(); stage?.focus(); return; }  // volta pra lista (zap)
         if (e.key.startsWith('Arrow')) {
-            e.preventDefault(); spatialMove(e.key);
+            e.preventDefault();
+            const before = a;
+            const moved = spatialMove(e.key);   // move ENTRE player/provedores (escopo do stage)
             const na = document.activeElement as HTMLElement | null;
-            if (na && na.closest('.chan-list')) stage?.focus();  // caiu na lista → volta pro zap
+            if (na && na.closest('.chan-list')) { stage?.focus(); return; }  // caiu na lista → modo zap
+            if (!moved || na === before) {
+                // Nada na direção dentro do stage → sai dele:
+                if (e.key === 'ArrowLeft') stage?.focus();        // ← (esquerda esgotada) vai pra lista de canais
+                else if (e.key === 'ArrowUp') focusTopbar();      // ↑ (topo do player) vai pras abas do topo
+                // ↓/→ sem alvo: permanece (não há pra onde ir)
+            }
         } else if (e.key === 'Backspace' || e.key === 'Escape') { e.preventDefault(); stage?.focus(); }
     }
 }
@@ -335,7 +350,7 @@ function App() {
     return (
         <div className={`home ${section}`} ref={homeRef}>
             <header className="topbar">
-                <button className="brand-sm" onClick={() => setSection('pick')}>RAJADA</button>
+                <button className="brand-sm" tabIndex={-1} onClick={() => setSection('pick')}>RAJADA</button>
                 <nav className="tabs-top">
                     <button className={section === 'vod' ? 'on' : ''} onClick={() => setSection('vod')}>Filmes e Séries</button>
                     <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
@@ -989,6 +1004,17 @@ function ChannelsView({ engine, cats, flat, loading }: {
     // Voltar do controle: na lista de canais vai pras categorias (não sai do app).
     useBackHandler(mode === 'channels', () => setMode('cats'));
 
+    // Tecla MENU do controle → abre/fecha as Categorias (alguns controles de TV).
+    useEffect(() => {
+        const onMenu = (e: KeyboardEvent) => {
+            if (e.key === 'ContextMenu' || e.keyCode === 82 || e.key === 'F1' || (e as any).keyCode === 457) {
+                e.preventDefault(); setMode(m => (m === 'cats' ? 'channels' : 'cats'));
+            }
+        };
+        window.addEventListener('keydown', onMenu);
+        return () => window.removeEventListener('keydown', onMenu);
+    }, []);
+
     // Ao entrar nas categorias, foca a categoria atual (ou a 1ª) — começa já posicionado.
     useEffect(() => {
         if (mode !== 'cats') return;
@@ -1082,6 +1108,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     const [alt, setAlt] = useState(0);        // fonte em uso (p/ aviso "tentando alternativa")
     const [dead, setDead] = useState(false);  // todas as fontes falharam
     const [loading, setLoading] = useState(false); // bufferizando (feedback ao zapear)
+    const [hasFrame, setHasFrame] = useState(false); // já pintou o 1º quadro? (cobre c/ preto até lá)
     const [fs, setFs] = useState(false);      // tela cheia (CSS — funciona em qualquer TV)
     const [showCtrl, setShowCtrl] = useState(true);  // barra de controles visível (auto-some)
     const [paused, setPaused] = useState(false);
@@ -1138,7 +1165,8 @@ function LivePlayer({ sources, title, options, onPick }: {
     }, []);
 
     // Troca de canal/marca → recomeça da 1ª fonte (loadSource na MESMA instância).
-    useEffect(() => { setDead(false); recoverRef.current = 0; playAt(0); }, [sources, playAt]);
+    // setHasFrame(false) já cobre tudo de PRETO até o 1º quadro real (mata o flash cinza).
+    useEffect(() => { setDead(false); setHasFrame(false); recoverRef.current = 0; playAt(0); }, [sources, playAt]);
 
     // Vigia de travadas: se está tocando mas o tempo não anda por ~3s, cutuca o hls.
     useEffect(() => {
@@ -1155,7 +1183,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     // Feedback de "carregando": some quando o vídeo realmente começa.
     useEffect(() => {
         const v = ref.current; if (!v) return;
-        const done = () => { clearTimeout(startTimer.current); setLoading(false); };
+        const done = () => { clearTimeout(startTimer.current); setLoading(false); setHasFrame(true); };
         const wait = () => setLoading(true);
         v.addEventListener('playing', done); v.addEventListener('canplay', done);
         v.addEventListener('waiting', wait);
@@ -1237,7 +1265,7 @@ function LivePlayer({ sources, title, options, onPick }: {
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
             {canFs && !fs && <span className="live-hint">⛶ OK = tela cheia</span>}
             {!sources.length && <div className="live-empty">▶ Selecione um canal na lista</div>}
-            {loading && !dead && !!sources.length && <div className="live-loading"><span className="spin" /></div>}
+            {!hasFrame && !dead && !!sources.length && <div className="live-loading"><span className="spin" /></div>}
             {trying && <div className="live-fallback">Fonte instável — tentando alternativa {alt + 1}/{sources.length}…</div>}
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
             {fs && (
@@ -1713,6 +1741,22 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // buscadas sob demanda
     const [loadingCat, setLoadingCat] = useState(false);
     const [scrolled, setScrolled] = useState(false);   // board saiu da tela → mostra preview flutuante
+    const vodRef = useRef<HTMLDivElement>(null);        // scroller (p/ revelar o board ao subir)
+
+    // ↑ estando na 1ª fileira (ou na barra de categorias) → rola TUDO pro topo e foca o
+    // botão Assistir, fazendo o board grande reaparecer COMPLETO (bug: ficava cortado).
+    const onVodKey = useCallback((e: React.KeyboardEvent) => {
+        if (e.key !== 'ArrowUp') return;
+        const sc = vodRef.current; if (!sc) return;
+        const a = document.activeElement as HTMLElement | null; if (!a) return;
+        const firstSec = sc.querySelector('.vod-rows section, .vod-rows .vod-cat-sec');
+        const sec = a.closest('section, .vod-cat-sec');
+        if (a.closest('.vod-catbar') || (sec && sec === firstSec)) {
+            e.preventDefault(); e.stopPropagation();
+            sc.scrollTo({ top: 0, behavior: 'smooth' });
+            setTimeout(() => (sc.querySelector('.vod-board .vb-play') as HTMLElement | null)?.focus(), 60);
+        }
+    }, []);
     // Categorias descobertas vazias (escondidas dos botões). Persiste entre sessões.
     const [empty, setEmpty] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('rajada.vodempty.v1') || '[]')); } catch { return new Set(); } });
 
@@ -1834,7 +1878,7 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     // a descrição/nota do item EM FOCO num cantinho — "passou em cima, apareceu a info".
     const showPreview = scrolled && !!focused && !!D;
     return (
-        <div className="vod-view" onScroll={(e) => { const st = (e.currentTarget as HTMLElement).scrollTop; setScrolled(prev => { const n = st > 200; return n === prev ? prev : n; }); }}>
+        <div className="vod-view" ref={vodRef} onKeyDown={onVodKey} onScroll={(e) => { const st = (e.currentTarget as HTMLElement).scrollTop; setScrolled(prev => { const n = st > 200; return n === prev ? prev : n; }); }}>
             {showPreview && (
                 <div className="vod-preview">
                     {D.poster && !/placehold/.test(D.poster) && <img className="vod-preview-poster" src={D.poster} alt="" />}
@@ -1867,7 +1911,8 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                         {genres.length > 0 && <span className="vb-genres">{genres.slice(0, 3).join(' · ')}</span>}
                     </div>
                     {D.description && <p className="vb-desc">{D.description}</p>}
-                    {cast.length > 0 && <div className="vb-cast"><b>Elenco:</b> {cast.slice(0, 4).join(', ')}</div>}
+                    {/* Elenco fica nos Detalhes/preview — fora do board p/ o conteúdo NÃO
+                        estourar a altura e cortar o título sob a barra do topo. */}
                     <button className="vb-play" onClick={() => onOpen(D)}>▶ Assistir</button>
                 </div>
             </div>
