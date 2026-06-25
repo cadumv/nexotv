@@ -277,7 +277,10 @@ function App() {
 
     const buildGames = useCallback(async (eng: NexoEngine) => {
         setGamesLoading(true);
-        try { const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' }); setGamesMetas(metas || []); }
+        try {
+            await (eng as any).vodReady;   // jogos dependem do EPG, que carrega no 2º plano
+            const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' }); setGamesMetas(metas || []);
+        }
         catch { setGamesMetas([]); }
         setGamesLoading(false);
     }, []);
@@ -523,36 +526,84 @@ const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ in
 // Tira o prefixo "Canais | " do nome da categoria (usado na lista e no cabeçalho).
 const chanLabel = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
 
-// Linha de canal MEMOIZADA (sem prop de seleção — o destaque .on é aplicado no DOM).
-const ChannelRow = React.memo(function ChannelRow({ meta, index, onSelect }: { meta: any; index: number; onSelect: (i: number) => void }) {
+// Alturas FIXAS dos itens da lista virtualizada (px). Essenciais p/ calcular offsets
+// sem medir o DOM. Mantidas em sincronia com .chan-virt .chan-row / .chan-divider no CSS.
+const VROW_H = 48, VHEAD_H = 30;
+
+// Ícone do canal, encolhido: os logos vêm do proxy wsrv.nl em 320px e eram decodificados
+// em 320px (centenas deles = trava na TV). O ícone tem 38px → pede 96px (suficiente p/ HiDPI).
+const ICON_W = 96;
+function iconSrc(meta: any): string {
+    let s = (Array.isArray(meta.posterChain) && meta.posterChain[0]) || meta.poster || cardFor(meta.name);
+    if (typeof s === 'string' && s.includes('wsrv.nl')) {
+        s = /[?&]w=\d+/.test(s) ? s.replace(/([?&]w=)\d+/, '$1' + ICON_W) : (s + (s.includes('?') ? '&' : '?') + 'w=' + ICON_W);
+    }
+    return s;
+}
+
+// Logos já baixados (por URL): uma vez carregados, nunca "rebaixam" pro placeholder,
+// mesmo rolando — evita piscar. Decodificar logos remotos durante a rolagem rápida era
+// o que restava travando (lista virtualizada já roda a 52fps sem imagens).
+const loadedIcons = new Set<string>();
+
+// Linha de canal (posicionada por `top` absoluto na lista virtualizada). Durante a
+// rolagem (`defer`), mostra o card local SVG (instantâneo); o logo real entra quando
+// a rolagem para — ou já está, se foi carregado antes.
+const VRow = React.memo(function VRow({ meta, index, onSelect, selected, top, defer }: { meta: any; index: number; onSelect: (i: number) => void; selected: boolean; top: number; defer: boolean }) {
+    const real = iconSrc(meta);
+    const showReal = !defer || loadedIcons.has(real);
     return (
-        <button data-i={index} className="chan-row" onClick={() => onSelect(index)}>
-            <img className="chan-ico" alt="" loading="lazy"
-                src={(Array.isArray(meta.posterChain) && meta.posterChain[0]) || meta.poster || cardFor(meta.name)}
+        <button data-i={index} className={'chan-row' + (selected ? ' on' : '')} style={{ top }} onClick={() => onSelect(index)}>
+            <img className="chan-ico" alt="" loading="lazy" decoding="async"
+                src={showReal ? real : cardFor(meta.name)}
+                onLoad={() => { if (showReal) loadedIcons.add(real); }}
                 onError={(e) => { const c = cardFor(meta.name); const img = e.currentTarget as HTMLImageElement; if (img.src !== c) img.src = c; }} />
             <span className="chan-name">{meta.name}</span>
         </button>
     );
 });
 
-// Lista de canais INTEIRA memoizada: só re-renderiza quando `vflat` muda (favoritos/
-// categoria), NÃO ao zapear. A seleção (.on) é aplicada imperativamente pelo pai →
-// zap instantâneo mesmo com centenas de canais.
-const ChannelList = React.memo(function ChannelList({ vflat, onSelect }: { vflat: FlatItem[]; onSelect: (i: number) => void }) {
-    const secs: { hi: number; header: FlatItem; items: { f: FlatItem; i: number }[] }[] = [];
-    vflat.forEach((f, i) => {
-        if (f.kind === 'header') secs.push({ hi: i, header: f, items: [] });
-        else if (secs.length) secs[secs.length - 1].items.push({ f, i });
-    });
-    return (
-        <>{secs.map(sec => (
-            <div className="chan-section" key={'s' + sec.hi}>
-                <div className="chan-divider" data-h={sec.hi}><span>{chanLabel(sec.header.name)}</span></div>
-                {sec.items.map(({ f, i }) => <ChannelRow key={i} meta={f.meta} index={i} onSelect={onSelect} />)}
-            </div>
-        ))}</>
-    );
-});
+// Lista de canais VIRTUALIZADA: renderiza só as ~linhas visíveis (+overscan). Com 700+
+// canais, a lista plana criava uma camada de ~40.000px que o compositor da TV não
+// conseguia rasterizar (rolagem a 5fps). Virtualizando, o DOM tem ~30 nós e rola liso.
+function VChannelList({ vflat, offsets, total, selectedIdx, onSelect, scrollRef }: {
+    vflat: FlatItem[]; offsets: number[]; total: number; selectedIdx: number;
+    onSelect: (i: number) => void; scrollRef: React.RefObject<HTMLDivElement>;
+}) {
+    const [, force] = useState(0);
+    const [vh, setVh] = useState(500);
+    const [scrolling, setScrolling] = useState(false);
+    const settleTimer = useRef<any>(null);
+    useEffect(() => {
+        const sc = scrollRef.current; if (!sc) return;
+        setVh(sc.clientHeight);
+        let raf: number | null = null;
+        const onScroll = () => {
+            setScrolling(true);   // no-op se já true (React ignora)
+            clearTimeout(settleTimer.current);
+            settleTimer.current = setTimeout(() => setScrolling(false), 140);  // logos entram quando para
+            if (raf != null) return; raf = requestAnimationFrame(() => { raf = null; force(t => t + 1); });
+        };
+        sc.addEventListener('scroll', onScroll, { passive: true });
+        const ro = new ResizeObserver(() => setVh(sc.clientHeight)); ro.observe(sc);
+        return () => { sc.removeEventListener('scroll', onScroll); ro.disconnect(); if (raf != null) cancelAnimationFrame(raf); clearTimeout(settleTimer.current); };
+    }, [scrollRef]);
+
+    const sc = scrollRef.current;
+    const st = sc ? sc.scrollTop : 0;
+    const OVER = 240;                              // px de overscan acima/abaixo
+    const top = st - OVER, bot = st + vh + OVER;
+    // 1º índice cujo fim ultrapassa o topo visível (busca binária nos offsets).
+    let lo = 0, hi = vflat.length - 1, start = vflat.length ? vflat.length - 1 : 0;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (offsets[mid + 1] > top) { start = mid; hi = mid - 1; } else lo = mid + 1; }
+    const items: any[] = [];
+    for (let i = start; i < vflat.length && offsets[i] < bot; i++) {
+        const f = vflat[i];
+        if (f.kind === 'header') items.push(<div key={'h' + i} className="chan-divider" data-h={i} style={{ top: offsets[i] }}><span>{chanLabel(f.name)}</span></div>);
+        else items.push(<VRow key={i} meta={f.meta} index={i} onSelect={onSelect} selected={i === selectedIdx} top={offsets[i]} defer={scrolling} />);
+    }
+    return <div className="chan-virt" style={{ height: total }}>{items}</div>;
+}
 
 // Agrupa os jogos: ao vivo → próximos (hoje+amanhã) → por competição. Tudo
 // ordenado por data (mais cedo primeiro); competição ordenada pelo jogo + cedo.
@@ -805,11 +856,28 @@ function ChannelsView({ engine, cats, flat, loading }: {
 
     const chanIdxs = useMemo(() => { const a: number[] = []; vflat.forEach((f, i) => { if (f.kind === 'chan') a.push(i); }); return a; }, [vflat]);
 
+    // Offsets (top em px) de cada item — base da virtualização e de toda rolagem por
+    // índice (sem medir o DOM). offsets[n] = altura total da lista.
+    const { rowOffsets, listTotal } = useMemo(() => {
+        const o = new Array(vflat.length + 1); let y = 0;
+        for (let i = 0; i < vflat.length; i++) { o[i] = y; y += vflat[i].kind === 'header' ? VHEAD_H : VROW_H; }
+        o[vflat.length] = y; return { rowOffsets: o as number[], listTotal: y };
+    }, [vflat]);
+
+    // Rola o container p/ deixar o índice `i` visível (lista virtualizada → por offset).
+    const scrollToIdx = useCallback((i: number, toTop = false) => {
+        const sc = scrollRef.current; if (!sc || i < 0) return;
+        const t = rowOffsets[i]; const h = sc.clientHeight;
+        if (toTop) sc.scrollTop = Math.max(0, t);
+        else if (t < sc.scrollTop) sc.scrollTop = Math.max(0, t - VHEAD_H);
+        else if (t + VROW_H > sc.scrollTop + h) sc.scrollTop = t + VROW_H - h;
+    }, [rowOffsets]);
+
     // Ao (des)favoritar, a lista reordena → reaponta o índice pro canal que está tocando.
     useEffect(() => {
         if (!curIdRef.current) return;
         const ni = vflat.findIndex(f => f.kind === 'chan' && f.meta.id === curIdRef.current);
-        if (ni >= 0) { setIdx(ni); setTimeout(() => scrollRef.current?.querySelector(`[data-i="${ni}"]`)?.scrollIntoView({ block: 'nearest' }), 0); }
+        if (ni >= 0) { setIdx(ni); setTimeout(() => scrollToIdx(ni), 0); }
     }, [favVer]);
 
     const loadStream = useCallback(async (i: number) => {
@@ -841,14 +909,8 @@ function ChannelsView({ engine, cats, flat, loading }: {
         setTimeout(() => stageRef.current?.focus(), 0);  // foco no stage (não na linha)
     }, [loadStream, vflat]);
 
-    // Destaque de seleção aplicado direto no DOM (a lista é memoizada e NÃO re-renderiza
-    // ao zapear) → troca de canal instantânea mesmo com centenas de itens.
-    useEffect(() => {
-        const sc = scrollRef.current; if (!sc) return;
-        sc.querySelectorAll('.chan-row.on').forEach(el => el.classList.remove('on'));
-        const el = sc.querySelector(`[data-i="${idx}"]`) as HTMLElement | null;
-        if (el) { el.classList.add('on'); el.scrollIntoView({ block: 'nearest' }); }
-    }, [idx, vflat, mode]);
+    // Mantém o canal selecionado visível ao zapear (o destaque .on vai via prop na lista).
+    useEffect(() => { scrollToIdx(idx); }, [idx, scrollToIdx, mode]);
 
     // Entra já tocando o 1º canal (o mais assistido, se houver histórico).
     useEffect(() => {
@@ -862,33 +924,33 @@ function ChannelsView({ engine, cats, flat, loading }: {
         for (let i = h + 1; i < vflat.length; i++) { if (vflat[i].kind === 'chan') { fc = i; break; } if (vflat[i].kind === 'header') break; }
         setMode('channels');
         if (fc >= 0) select(fc, true);
-        // Rola o cabeçalho da categoria escolhida pro TOPO da lista (não pro fim).
-        // Espera a lista renderizar e alinha pelo bounding rect (sticky-safe).
-        setTimeout(() => {
-            const sc = scrollRef.current; const el = sc?.querySelector(`[data-h="${h}"]`) as HTMLElement | null;
-            if (sc && el) sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top;
-            stageRef.current?.focus();
-        }, 140);
+        // Rola o cabeçalho da categoria escolhida pro TOPO da lista.
+        setTimeout(() => { scrollToIdx(h, true); stageRef.current?.focus(); }, 0);
     };
 
     // "Sticky" sem buraco: a categoria do topo da rolagem é refletida na BARRA FIXA
-    // externa (.chan-list-head), não num elemento dentro da lista. Os divisores ficam
-    // inline (não-sticky) → impossível gerar vão/corte. Calcula qual seção está no topo.
-    const recalcTopCat = useCallback(() => {
+    // externa (.chan-list-head). Com offsets pré-calculados, achar a categoria do topo é
+    // só comparar scrollTop aos offsets dos cabeçalhos — ZERO leitura de layout, throttle
+    // por requestAnimationFrame (a versão antiga media o DOM a cada scroll = travava).
+    const rafRef = useRef<number | null>(null);
+    const applyTopCat = useCallback(() => {
         const sc = scrollRef.current; if (!sc) return;
-        const top = sc.getBoundingClientRect().top + 1;
-        const divs = sc.querySelectorAll<HTMLElement>('.chan-divider[data-h]');
+        const st = sc.scrollTop + 1;
         let name = '';
-        for (const d of Array.from(divs)) {
-            if (d.getBoundingClientRect().top <= top) name = d.textContent || '';
-            else break;
+        for (let i = 0; i < vflat.length; i++) {
+            if (vflat[i].kind !== 'header') continue;
+            if (rowOffsets[i] <= st) name = chanLabel(vflat[i].name); else break;
         }
-        if (!name && divs.length) name = divs[0].textContent || '';
         setTopCat(prev => (prev === name ? prev : name));
-    }, []);
+    }, [vflat, rowOffsets]);
 
-    // Recalcula ao trocar a lista e logo após montar.
-    useEffect(() => { const t = setTimeout(recalcTopCat, 60); return () => clearTimeout(t); }, [vflat, recalcTopCat, mode]);
+    const recalcTopCat = useCallback(() => {
+        if (rafRef.current != null) return;            // 1 cálculo por frame, sem forçar layout
+        rafRef.current = requestAnimationFrame(() => { rafRef.current = null; applyTopCat(); });
+    }, [applyTopCat]);
+
+    // Recalcula a categoria do topo ao trocar a lista/modo.
+    useEffect(() => { applyTopCat(); return () => { if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } }; }, [vflat, mode, applyTopCat]);
 
     const move = (dir: 1 | -1) => {
         const pos = chanIdxs.indexOf(idx);
@@ -955,7 +1017,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                             </button>
                         ))
                     ) : (
-                        <ChannelList vflat={vflat} onSelect={selectNow} />
+                        <VChannelList vflat={vflat} offsets={rowOffsets} total={listTotal} selectedIdx={idx} onSelect={selectNow} scrollRef={scrollRef} />
                     )}
                 </div>
             </aside>
@@ -1180,38 +1242,111 @@ function LivePlayer({ sources, title, options, onPick }: {
     );
 }
 
-/** Player em tela cheia: HLS via hls.js; senão <video> nativo; fallback "abrir externo". */
+/** Player VOD (filme/série): mesma interface do player ao vivo — fundo preto, SEM
+ *  controles nativos cinzas, barra própria que some sozinha, navegável por controle
+ *  remoto (D-pad). HLS via hls.js; senão <video> nativo; fallback "abrir externo". */
 function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; title: string; contentKey?: string; resumeFrom?: number; onClose: () => void }) {
     const ref = useRef<HTMLVideoElement>(null);
+    const boxRef = useRef<HTMLDivElement>(null);
+    const ctrlRef = useRef<HTMLDivElement>(null);
+    const hideTimer = useRef<any>(null);
+    const showRef = useRef(true);
     const [err, setErr] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [paused, setPaused] = useState(false);
+    const [muted, setMuted] = useState(false);
+    const [cur, setCur] = useState(0);
+    const [dur, setDur] = useState(0);
+    const [showCtrl, setShowCtrl] = useState(true);
     useBackHandler(true, onClose);   // Voltar do controle fecha o player
+
     useEffect(() => {
         const v = ref.current; if (!v) return;
-        // Player adaptativo: nativo → hls.js conforme a plataforma; só marca erro
-        // quando todas as engines falham.
         const handle = attachAdaptive(v, url, () => setErr(true));
-        // Retoma de onde parou (VOD).
         if (resumeFrom && resumeFrom > 5) {
             const seek = () => { try { if (v.currentTime < 1) v.currentTime = resumeFrom; } catch { } };
             v.addEventListener('loadedmetadata', seek, { once: true });
         }
-        // Salva o progresso periodicamente (continuar assistindo / retomar).
         let last = 0;
-        const onTime = () => { if (!contentKey) return; const now = v.currentTime; if (Math.abs(now - last) >= 5) { last = now; saveProg(contentKey, now, v.duration); } };
+        const onTime = () => {
+            setCur(v.currentTime); setDur(v.duration || 0);
+            if (!contentKey) return; const now = v.currentTime;
+            if (Math.abs(now - last) >= 5) { last = now; saveProg(contentKey, now, v.duration); }
+        };
+        const onPlaying = () => setLoading(false);
+        const onWaiting = () => setLoading(true);
         v.addEventListener('timeupdate', onTime);
-        return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); handle.destroy(); };
+        v.addEventListener('playing', onPlaying); v.addEventListener('canplay', onPlaying);
+        v.addEventListener('waiting', onWaiting);
+        return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); v.removeEventListener('playing', onPlaying); v.removeEventListener('canplay', onPlaying); v.removeEventListener('waiting', onWaiting); handle.destroy(); };
     }, [url]);
+
+    // Sincroniza play/mudo com o vídeo.
+    useEffect(() => {
+        const v = ref.current; if (!v) return;
+        const sync = () => { setPaused(v.paused); setMuted(v.muted); };
+        v.addEventListener('play', sync); v.addEventListener('pause', sync); v.addEventListener('volumechange', sync);
+        return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', sync); };
+    }, []);
+
+    // Controlador da barra: some após 4s parado, reaparece em qualquer ação.
+    const setShow = useCallback((b: boolean) => { showRef.current = b; setShowCtrl(b); }, []);
+    const reveal = useCallback(() => { setShow(true); clearTimeout(hideTimer.current); hideTimer.current = setTimeout(() => setShow(false), 4000); }, [setShow]);
+    const ctrlButtons = () => Array.from(ctrlRef.current?.querySelectorAll<HTMLElement>('button') || []);
+    const focusCtrl = (i = 0) => { const b = ctrlButtons(); b[Math.max(0, Math.min(b.length - 1, i))]?.focus(); };
+    const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
+    const togglePlay = () => { const v = ref.current; if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
+    const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
+    const seek = (delta: number) => { const v = ref.current; if (!v) return; try { v.currentTime = Math.max(0, Math.min((v.duration || 1e9), v.currentTime + delta)); } catch { } reveal(); };
+
+    // Navegação por controle remoto (D-pad): some/reaparece; ←→ entre botões ou seek;
+    // OK toca/pausa; Voltar fecha. Tudo confinado (não vaza pra lista atrás).
+    useEffect(() => {
+        reveal();
+        const t = setTimeout(() => focusCtrl(0), 60);
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' || e.key === 'Backspace') return; // useBackHandler trata
+            e.stopPropagation();
+            if (!showRef.current) { e.preventDefault(); reveal(); focusCtrl(0); return; }  // 1ª tecla só revela
+            reveal();
+            if (e.key === 'ArrowRight') { e.preventDefault(); moveCtrl(1); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); moveCtrl(-1); }
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); }
+        };
+        const onMove = () => reveal();
+        window.addEventListener('keydown', onKey, true);
+        window.addEventListener('mousemove', onMove, true);
+        return () => { clearTimeout(t); clearTimeout(hideTimer.current); window.removeEventListener('keydown', onKey, true); window.removeEventListener('mousemove', onMove, true); };
+    }, [reveal]);
+
+    const pct = dur > 0 ? (cur / dur) * 100 : 0;
     return (
-        <div className="player" onClick={onClose}>
-            <div className="player-box" onClick={e => e.stopPropagation()}>
-                <div className="player-bar"><span>{title}</span><button onClick={onClose}>✕</button></div>
-                <video ref={ref} controls autoPlay playsInline className="player-video" />
-                {err && (
-                    <div className="player-err">
-                        Não consegui tocar aqui.
-                        <button onClick={() => window.open(url, '_blank')}>Abrir externo</button>
-                    </div>
-                )}
+        <div ref={boxRef}
+            className={`player${showCtrl ? '' : ' nocursor'}`}
+            tabIndex={0}
+            onClick={() => reveal()}>
+            <video ref={ref} autoPlay playsInline className="player-video" />
+            {loading && !err && <div className="live-loading"><span className="spin" /></div>}
+            {err && (
+                <div className="player-err">
+                    Não consegui tocar aqui.
+                    <button onClick={() => window.open(url, '_blank')}>Abrir externo</button>
+                </div>
+            )}
+            <div className={`live-ov${showCtrl ? '' : ' hidden'}`}>
+                <div className="live-ov-top"><span className="live-ov-title">{title}</span></div>
+                <div className="player-seek">
+                    <span className="player-time">{fmtTime(cur)}</span>
+                    <div className="player-bar-track"><i style={{ width: pct + '%' }} /></div>
+                    <span className="player-time">{fmtTime(dur)}</span>
+                </div>
+                <div className="live-ctrl" ref={ctrlRef}>
+                    <button className="live-cbtn" onClick={() => seek(-10)} aria-label="Voltar 10s" title="−10s">⏪</button>
+                    <button className="live-cbtn" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}>{paused ? '▶' : '❚❚'}</button>
+                    <button className="live-cbtn" onClick={() => seek(30)} aria-label="Avançar 30s" title="+30s">⏩</button>
+                    <button className="live-cbtn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}>{muted ? '🔇' : '🔊'}</button>
+                    <button className="live-cbtn live-cbtn-exit" onClick={onClose} aria-label="Fechar">✕ Sair</button>
+                </div>
             </div>
         </div>
     );
@@ -1226,11 +1361,23 @@ function shapeFor(meta: any): 'square' | 'landscape' | 'poster' {
     return 'poster';
 }
 // Card gerado (cor determinística pelo nome) como último recurso se a imagem falhar.
+// SVG data-URI LOCAL (sem rede): com centenas de canais, bater no placehold.co era
+// centenas de requisições remotas — pesado e lento na TV. Agora é instantâneo/offline.
+const _cardCache = new Map<string, string>();
 function cardFor(name: string) {
-    const s = name || 'TV'; let h = 0;
+    const s = name || 'TV';
+    const hit = _cardCache.get(s); if (hit) return hit;
+    let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     const pal = ['1f3a5f', '3a1f5f', '5f1f2e', '1f5f3a', '5f4a1f', '2e1f5f', '1f5f5a', '5f1f4a', '24304a', '402a2a'];
-    return `https://placehold.co/320x320/${pal[h % pal.length]}/FFFFFF.png?text=${encodeURIComponent(s)}&font=oswald`;
+    const bg = pal[h % pal.length];
+    // Iniciais (até 2 letras) — fica limpo no quadradinho.
+    const initials = s.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || 'TV';
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#${bg}"/><text x="80" y="80" font-family="Segoe UI,Arial,sans-serif" font-size="64" font-weight="800" fill="#fff" text-anchor="middle" dominant-baseline="central">${esc(initials)}</text></svg>`;
+    const uri = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    _cardCache.set(s, uri);
+    return uri;
 }
 // Nota IMDb numérica (string "7.8" → 7.8) p/ ordenar destaques.
 function ratingNum(m: any): number { const r = parseFloat(m?.imdbRating); return isFinite(r) ? r : 0; }
