@@ -520,16 +520,37 @@ function dedupStreams(streams: any[]): { label: string; urls: string[] }[] {
 // Rola o chip focado pra dentro da vista (D-pad na TV / Tab na web).
 const focusScroll = (e: React.FocusEvent) => e.currentTarget.scrollIntoView({ inline: 'center', block: 'nearest' });
 
-// Linha de canal MEMOIZADA: ao zapear (idx muda), só as 2 linhas cujo `selected`
-// mudou re-renderizam — sem isso a TV re-renderiza centenas de itens por tecla (lag).
-const ChannelRow = React.memo(function ChannelRow({ meta, index, selected, onSelect }: { meta: any; index: number; selected: boolean; onSelect: (i: number) => void }) {
+// Tira o prefixo "Canais | " do nome da categoria (usado na lista e no cabeçalho).
+const chanLabel = (n: string) => (n || '').replace(/^Canais\s*\|\s*/i, '').trim() || n;
+
+// Linha de canal MEMOIZADA (sem prop de seleção — o destaque .on é aplicado no DOM).
+const ChannelRow = React.memo(function ChannelRow({ meta, index, onSelect }: { meta: any; index: number; onSelect: (i: number) => void }) {
     return (
-        <button data-i={index} className={`chan-row${selected ? ' on' : ''}`} onClick={() => onSelect(index)}>
+        <button data-i={index} className="chan-row" onClick={() => onSelect(index)}>
             <img className="chan-ico" alt="" loading="lazy"
                 src={(Array.isArray(meta.posterChain) && meta.posterChain[0]) || meta.poster || cardFor(meta.name)}
                 onError={(e) => { const c = cardFor(meta.name); const img = e.currentTarget as HTMLImageElement; if (img.src !== c) img.src = c; }} />
             <span className="chan-name">{meta.name}</span>
         </button>
+    );
+});
+
+// Lista de canais INTEIRA memoizada: só re-renderiza quando `vflat` muda (favoritos/
+// categoria), NÃO ao zapear. A seleção (.on) é aplicada imperativamente pelo pai →
+// zap instantâneo mesmo com centenas de canais.
+const ChannelList = React.memo(function ChannelList({ vflat, onSelect }: { vflat: FlatItem[]; onSelect: (i: number) => void }) {
+    const secs: { hi: number; header: FlatItem; items: { f: FlatItem; i: number }[] }[] = [];
+    vflat.forEach((f, i) => {
+        if (f.kind === 'header') secs.push({ hi: i, header: f, items: [] });
+        else if (secs.length) secs[secs.length - 1].items.push({ f, i });
+    });
+    return (
+        <>{secs.map(sec => (
+            <div className="chan-section" key={'s' + sec.hi}>
+                <div className="chan-divider" data-h={sec.hi}><span>{chanLabel(sec.header.name)}</span></div>
+                {sec.items.map(({ f, i }) => <ChannelRow key={i} meta={f.meta} index={i} onSelect={onSelect} />)}
+            </div>
+        ))}</>
     );
 });
 
@@ -817,9 +838,17 @@ function ChannelsView({ engine, cats, flat, loading }: {
         setIdx(i);
         clearTimeout(timer.current);
         timer.current = setTimeout(() => loadStream(i), now ? 0 : 200);  // debounce no zapping
-        // Mantém o foco no stage (não na linha) → ↑↓ zapeia e → vai pro player.
-        setTimeout(() => { scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }); stageRef.current?.focus(); }, 0);
+        setTimeout(() => stageRef.current?.focus(), 0);  // foco no stage (não na linha)
     }, [loadStream, vflat]);
+
+    // Destaque de seleção aplicado direto no DOM (a lista é memoizada e NÃO re-renderiza
+    // ao zapear) → troca de canal instantânea mesmo com centenas de itens.
+    useEffect(() => {
+        const sc = scrollRef.current; if (!sc) return;
+        sc.querySelectorAll('.chan-row.on').forEach(el => el.classList.remove('on'));
+        const el = sc.querySelector(`[data-i="${idx}"]`) as HTMLElement | null;
+        if (el) { el.classList.add('on'); el.scrollIntoView({ block: 'nearest' }); }
+    }, [idx, vflat, mode]);
 
     // Entra já tocando o 1º canal (o mais assistido, se houver histórico).
     useEffect(() => {
@@ -926,23 +955,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                             </button>
                         ))
                     ) : (
-                        // Agrupa por seção: cada cabeçalho + suas linhas num container, pra o
-                        // sticky ficar preso à seção e NÃO empilhar com o próximo (o "buraco").
-                        (() => {
-                            const secs: { hi: number; header: FlatItem; items: { f: FlatItem; i: number }[] }[] = [];
-                            vflat.forEach((f, i) => {
-                                if (f.kind === 'header') secs.push({ hi: i, header: f, items: [] });
-                                else if (secs.length) secs[secs.length - 1].items.push({ f, i });
-                            });
-                            return secs.map(sec => (
-                                <div className="chan-section" key={'s' + sec.hi}>
-                                    <div className="chan-divider" data-h={sec.hi}><span>{label(sec.header.name)}</span></div>
-                                    {sec.items.map(({ f, i }) => (
-                                        <ChannelRow key={i} meta={f.meta} index={i} selected={i === idx} onSelect={selectNow} />
-                                    ))}
-                                </div>
-                            ));
-                        })()
+                        <ChannelList vflat={vflat} onSelect={selectNow} />
                     )}
                 </div>
             </aside>

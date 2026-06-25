@@ -2,11 +2,13 @@
   "appId": "com.rajada.app",
   "appName": "Rajada",
   "webDir": "dist",
+  "backgroundColor": "#000000",
   "server": {
     "androidScheme": "http",
     "cleartext": true
   },
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": true,
+    "backgroundColor": "#000000"
   }
 }
