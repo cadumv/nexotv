@@ -218,6 +218,13 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .vb-play { background: #fff; color: #000; border: 0; border-radius: 8px; padding: 11px 26px; font-size: 16px; font-weight: 800; cursor: pointer; transition: background .15s, color .15s; }
 .vb-play:hover, .vb-play:focus { background: #e50914; color: #fff; outline: none; }
 .vod-rows { padding-top: 0; }
+/* Preview flutuante do item em foco (aparece ao navegar os cards com o board fora da tela). */
+.vod-preview { position: fixed; right: 24px; bottom: 22px; z-index: 30; display: flex; gap: 14px; width: min(540px, 46vw); padding: 14px; border-radius: 14px; background: linear-gradient(120deg, rgba(14,14,18,.97), rgba(14,14,18,.82)); border: 1px solid #26262e; box-shadow: 0 12px 40px rgba(0,0,0,.6); pointer-events: none; backdrop-filter: blur(6px); animation: previewIn .16s ease; }
+@keyframes previewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.vod-preview-poster { width: 78px; height: 117px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
+.vod-preview-info { min-width: 0; display: flex; flex-direction: column; }
+.vod-preview-title { font-size: 18px; font-weight: 800; margin: 2px 0 6px; line-height: 1.1; }
+.vod-preview-desc { font-size: 12.5px; color: #c8ccd4; margin: 8px 0 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 /* Barra de categorias — fixa no topo das fileiras. Linha 1 = principais,
    linha 2 = subcategorias da principal selecionada. Cada uma rola s/ o foco. */
 .vod-catbar { position: sticky; top: 0; z-index: 4; background: linear-gradient(#0b0b0f 78%, rgba(11,11,15,.9)); padding: 10px 0 6px; }

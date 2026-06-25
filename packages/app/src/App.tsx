@@ -914,7 +914,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
         if (now && it?.kind === 'chan' && it.meta.id === curIdRef.current) { stageRef.current?.focus(); return; }
         setIdx(i);
         clearTimeout(timer.current);
-        timer.current = setTimeout(() => loadStream(i), now ? 0 : 120);  // debounce no zapping
+        timer.current = setTimeout(() => loadStream(i), now ? 0 : 70);  // debounce no zapping
         setTimeout(() => stageRef.current?.focus(), 0);  // foco no stage (não na linha)
     }, [loadStream, vflat]);
 
@@ -1108,9 +1108,11 @@ function LivePlayer({ sources, title, options, onPick }: {
             if (!hls) {
                 hls = new Hls({
                     enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
-                    // Começa perto da borda ao vivo (menos segmentos pra bufferizar = zap rápido).
-                    liveSyncDurationCount: 2, maxBufferLength: 12, maxMaxBufferLength: 40, backBufferLength: 15,
-                    manifestLoadingTimeOut: 8000, fragLoadingTimeOut: 20000,
+                    // ZAP RÁPIDO: começa na MENOR qualidade (1º quadro quase instantâneo) e
+                    // o ABR sobe a resolução depois; buffer inicial curto, perto da borda.
+                    startLevel: 0, abrEwmaDefaultEstimate: 800000,
+                    liveSyncDurationCount: 1, maxBufferLength: 10, maxMaxBufferLength: 40, backBufferLength: 10,
+                    manifestLoadingTimeOut: 7000, fragLoadingTimeOut: 18000,
                     manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6,
                 });
                 hls.attachMedia(v);
@@ -1581,14 +1583,19 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
     }, [meta.id]);
     useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [onClose]);
     useBackHandler(true, onClose);   // Voltar do controle fecha o modal
-    // Leva o foco pra dentro do modal (senão o D-pad mexe nos cards atrás).
+    // Leva o foco direto pro botão Assistir/Continuar (senão o D-pad mexe nos cards
+    // atrás). Tenta algumas vezes pois o botão pode renderizar um instante depois.
     useEffect(() => {
         if (loading) return;
-        const t = setTimeout(() => {
-            const b = document.querySelector('.details-box .vb-play, .details-box .details-fav, .details-box .details-close') as HTMLElement | null;
-            b?.focus();
-        }, 80);
-        return () => clearTimeout(t);
+        let tries = 0; let h: any;
+        const grab = () => {
+            const play = document.querySelector('.details-box .vb-play') as HTMLElement | null;
+            if (play) { play.focus(); return; }
+            const any = document.querySelector('.details-box .details-fav, .details-box .details-close') as HTMLElement | null;
+            if (++tries < 12) h = setTimeout(grab, 60); else any?.focus();   // só cai no fallback se o play não aparecer
+        };
+        h = setTimeout(grab, 60);
+        return () => clearTimeout(h);
     }, [loading]);
 
     const videos: any[] = Array.isArray(d.videos) ? d.videos : [];
@@ -1705,6 +1712,7 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const [subCat, setSubCat] = useState<string>(initCat.current.sub || '__all');    // subcategoria (id do catálogo)
     const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // buscadas sob demanda
     const [loadingCat, setLoadingCat] = useState(false);
+    const [scrolled, setScrolled] = useState(false);   // board saiu da tela → mostra preview flutuante
     // Categorias descobertas vazias (escondidas dos botões). Persiste entre sessões.
     const [empty, setEmpty] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('rajada.vodempty.v1') || '[]')); } catch { return new Set(); } });
 
@@ -1822,8 +1830,27 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     if (favList.length) rows.push({ id: '__fav', name: '★ Minha lista', metas: favList });
     if (featured.length) rows.push({ id: '__feat', name: '⭐ Em alta · Bem avaliados', metas: featured });
 
+    // Preview flutuante: quando o board já saiu da tela (rolou p/ ver os cards), mostra
+    // a descrição/nota do item EM FOCO num cantinho — "passou em cima, apareceu a info".
+    const showPreview = scrolled && !!focused && !!D;
     return (
-        <div className="vod-view">
+        <div className="vod-view" onScroll={(e) => { const st = (e.currentTarget as HTMLElement).scrollTop; setScrolled(prev => { const n = st > 200; return n === prev ? prev : n; }); }}>
+            {showPreview && (
+                <div className="vod-preview">
+                    {D.poster && !/placehold/.test(D.poster) && <img className="vod-preview-poster" src={D.poster} alt="" />}
+                    <div className="vod-preview-info">
+                        <span className="vb-kind">{D.type === 'series' ? 'SÉRIE' : 'FILME'}</span>
+                        <h3 className="vod-preview-title">{D.name}</h3>
+                        <div className="vb-meta">
+                            {ratingNum(D) > 0 && <span className="vb-imdb">★ {D.imdbRating}</span>}
+                            {year && <span>{year}</span>}
+                            {D.runtime && <span>{D.runtime} min</span>}
+                            {genres.length > 0 && <span className="vb-genres">{genres.slice(0, 3).join(' · ')}</span>}
+                        </div>
+                        {D.description && <p className="vod-preview-desc">{D.description}</p>}
+                    </div>
+                </div>
+            )}
             <div className={'vod-board' + (noArt ? ' noart' : '')} style={art ? { backgroundImage: `url("${art}")` } : undefined}>
                 <div className="vb-grad" />
                 {noArt && D.poster && !/placehold/.test(D.poster) && (
