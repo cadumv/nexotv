@@ -233,6 +233,7 @@ function App() {
 
     const buildVod = useCallback(async (eng: NexoEngine, opts: EngineOptions) => {
         setVodLoading(true);
+        await (eng as any).vodReady;   // VOD/séries carregam em 2º plano — espera ficarem prontos
         const cats: any[] = eng.getManifest().catalogs;
         const pick = (id: string) => cats.find((c: any) => c.id === id);
         const buildRows = async (defs: any[]) => (await Promise.all(defs.filter(Boolean).map(async (c: any) => {

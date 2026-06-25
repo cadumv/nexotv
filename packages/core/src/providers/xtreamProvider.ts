@@ -15,6 +15,8 @@ export interface XtreamOpts {
     epgFetchTimeoutMs?: number;
     epgMaxBytes?: number;
     log?: (level: 'debug' | 'warn', msg: string, extra?: any) => void;
+    liveOnly?: boolean;   // só canais (rápido) — VOD/séries/EPG ficam pra depois
+    noLive?: boolean;     // pula canais — busca só VOD/séries/EPG (carga em 2º plano)
 }
 
 export interface XtreamData {
@@ -54,30 +56,35 @@ export async function fetchXtreamData(http: HttpClient, config: AddonConfig, opt
     const fetchTimeout = opts.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT;
     const out: XtreamData = { channels: [], movies: [], series: [], epgData: {} };
 
-    // ---- Canais ao vivo (obrigatório) ----
-    const liveResp = await http.get(`${base}&action=get_live_streams`, { headers: ua(opts), timeoutMs: fetchTimeout });
-    if (!liveResp || !liveResp.ok) throw new Error('Xtream live streams fetch failed');
-    const live = await liveResp.json();
+    // ---- Canais ao vivo (obrigatório, salvo quando buscamos só VOD/séries em 2º plano) ----
+    if (!opts.noLive) {
+        const liveResp = await http.get(`${base}&action=get_live_streams`, { headers: ua(opts), timeoutMs: fetchTimeout });
+        if (!liveResp || !liveResp.ok) throw new Error('Xtream live streams fetch failed');
+        const live = await liveResp.json();
 
-    const liveCats = await getJson(http, `${base}&action=get_live_categories`, opts, fetchTimeout);
-    const liveCatMap: Record<string, string> = {};
-    if (Array.isArray(liveCats)) {
-        for (const c of liveCats) if (c?.category_id && c?.category_name) liveCatMap[c.category_id] = c.category_name;
+        const liveCats = await getJson(http, `${base}&action=get_live_categories`, opts, fetchTimeout);
+        const liveCatMap: Record<string, string> = {};
+        if (Array.isArray(liveCats)) {
+            for (const c of liveCats) if (c?.category_id && c?.category_name) liveCatMap[c.category_id] = c.category_name;
+        }
+
+        out.channels = (Array.isArray(live) ? live : []).map((s: any) => {
+            const cat = liveCatMap[s.category_id] || s.category_name || s.category_id || 'Live';
+            return {
+                id: `xc${opts.idPrefix}_${s.stream_id}`,
+                name: s.name,
+                type: 'tv',
+                url: `${xtreamUrl}/live/${xtreamUsername}/${xtreamPassword}/${s.stream_id}.m3u8`,
+                logo: s.stream_icon,
+                category: cat,
+                epg_channel_id: s.epg_channel_id,
+                attributes: { 'tvg-logo': s.stream_icon, 'tvg-id': s.epg_channel_id, 'group-title': cat },
+            };
+        });
     }
 
-    out.channels = (Array.isArray(live) ? live : []).map((s: any) => {
-        const cat = liveCatMap[s.category_id] || s.category_name || s.category_id || 'Live';
-        return {
-            id: `xc${opts.idPrefix}_${s.stream_id}`,
-            name: s.name,
-            type: 'tv',
-            url: `${xtreamUrl}/live/${xtreamUsername}/${xtreamPassword}/${s.stream_id}.m3u8`,
-            logo: s.stream_icon,
-            category: cat,
-            epg_channel_id: s.epg_channel_id,
-            attributes: { 'tvg-logo': s.stream_icon, 'tvg-id': s.epg_channel_id, 'group-title': cat },
-        };
-    });
+    // Modo "só canais": retorna já, sem esperar o catálogo pesado de VOD/séries/EPG.
+    if (opts.liveOnly) return out;
 
     // ---- VOD + Séries (best-effort) ----
     if (config.enableVod !== false) {

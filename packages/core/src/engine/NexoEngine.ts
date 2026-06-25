@@ -100,21 +100,36 @@ export class NexoEngine {
         const provider = this.config.provider || 'xtream';
         if (provider === 'm3u') {
             await this._loadM3U();
-        } else {
-            const data = await fetchXtreamData(this.http, { ...this.config, enableEpg: true }, this._xopts);
-            this.channels = data.channels;
-            this.movies = data.movies;
-            this.series = data.series;
-            this.epgData = data.epgData;
-            this.epgNames = (data as any).epgNames || {};
+            this.channelMap = new Map(this.channels.map(c => [c.id, c]));
+            this.movieMap = new Map(this.movies.map(m => [m.id, m]));
+            this.seriesMap = new Map(this.series.map(s => [s.id, s]));
+            this._groupsMemo = null; this._logoIdx = null; this.buildTitleIndexes();
+            return;
         }
+        // Xtream: CANAIS primeiro (rápido) → app abre logo. VOD/séries/EPG vêm em 2º plano.
+        const cfg = { ...this.config, enableEpg: true };
+        const live = await fetchXtreamData(this.http, cfg, { ...this._xopts, liveOnly: true });
+        this.channels = live.channels;
+        this.movies = []; this.series = []; this.epgData = {}; this.epgNames = {};
         this.channelMap = new Map(this.channels.map(c => [c.id, c]));
-        this.movieMap = new Map(this.movies.map(m => [m.id, m]));
-        this.seriesMap = new Map(this.series.map(s => [s.id, s]));
-        this._groupsMemo = null;
-        this._logoIdx = null;
+        this.movieMap = new Map(); this.seriesMap = new Map();
+        this._groupsMemo = null; this._logoIdx = null;
         this.buildTitleIndexes();
+        // Catálogo pesado (filmes/séries) + EPG em segundo plano.
+        this.vodReady = fetchXtreamData(this.http, cfg, { ...this._xopts, noLive: true })
+            .then((rest) => {
+                this.movies = rest.movies; this.series = rest.series;
+                this.epgData = rest.epgData; this.epgNames = (rest as any).epgNames || {};
+                this.movieMap = new Map(this.movies.map(m => [m.id, m]));
+                this.seriesMap = new Map(this.series.map(s => [s.id, s]));
+                this._groupsMemo = null; this._logoIdx = null;
+                this.buildTitleIndexes();
+            })
+            .catch((e: any) => { this.options.log?.('warn', '[XTREAM] carga 2º plano falhou', e?.message); });
     }
+
+    /** Resolve quando o catálogo de VOD/séries/EPG terminou de carregar (2º plano). */
+    vodReady?: Promise<void>;
 
     /** Provedor M3U (lista .m3u/.m3u8) — cobre IPTV que não usa Xtream. */
     private async _loadM3U(): Promise<void> {
