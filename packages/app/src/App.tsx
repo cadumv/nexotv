@@ -627,8 +627,11 @@ function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [str
     const today0 = new Date(); today0.setHours(0, 0, 0, 0);
     const from = today0.getTime(); const to = from + 2 * 86400000;
     const upcoming = rest.filter(m => (m.startMs || 0) >= from && (m.startMs || 0) < to).sort(byTime);
+    // Os jogos já mostrados em "Próximos" NÃO se repetem nas competições abaixo (evita o
+    // mesmo jogo duas vezes — bug visível quando faltam nomes de campeonato).
+    const upSet = new Set(upcoming);
     const groups = new Map<string, any[]>();
-    for (const m of rest) { const k = (m.tournament || '').trim() || 'Outros jogos'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(m); }
+    for (const m of rest) { if (upSet.has(m)) continue; const k = (m.tournament || '').trim() || 'Outros jogos'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(m); }
     for (const list of groups.values()) list.sort(byNextFirst);
     // Chave de ordenação da competição = data do PRÓXIMO jogo dela (ignora os que
     // já passaram); se todos passaram, usa o último.
@@ -1085,6 +1088,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     const [muted, setMuted] = useState(false);
     const showRef = useRef(true);
     const hideTimer = useRef<any>(null);
+    const startTimer = useRef<any>(null);     // se a fonte não começar em ~9s, pula p/ a próxima
     const ctrlRef = useRef<HTMLDivElement>(null);
     srcRef.current = sources;
 
@@ -1095,6 +1099,10 @@ function LivePlayer({ sources, title, options, onPick }: {
         if (!v || !url) return;
         idxRef.current = i; setAlt(i); setLoading(true);
         const nextSrc = () => { const ni = idxRef.current + 1; if (ni < srcRef.current.length) { recoverRef.current = 0; playAt(ni); } else setDead(true); };
+        // Canal "pendurado" (carrega pra sempre, ex.: fonte morta): se em 9s não tiver
+        // começado a tocar, pula pra próxima fonte (ou marca como sem sinal).
+        clearTimeout(startTimer.current);
+        startTimer.current = setTimeout(() => { const vv = ref.current; if (vv && vv.readyState < 3 && vv.currentTime < 0.1) nextSrc(); }, 9000);
         if (Hls.isSupported()) {
             let hls = hlsRef.current;
             if (!hls) {
@@ -1145,7 +1153,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     // Feedback de "carregando": some quando o vídeo realmente começa.
     useEffect(() => {
         const v = ref.current; if (!v) return;
-        const done = () => setLoading(false);
+        const done = () => { clearTimeout(startTimer.current); setLoading(false); };
         const wait = () => setLoading(true);
         v.addEventListener('playing', done); v.addEventListener('canplay', done);
         v.addEventListener('waiting', wait);
@@ -1153,7 +1161,7 @@ function LivePlayer({ sources, title, options, onPick }: {
     }, []);
 
     // Destrói a instância ao desmontar.
-    useEffect(() => () => { try { hlsRef.current?.destroy(); } catch { } hlsRef.current = null; }, []);
+    useEffect(() => () => { clearTimeout(startTimer.current); try { hlsRef.current?.destroy(); } catch { } hlsRef.current = null; }, []);
     // ---- Controlador da barra de tela cheia (some sozinha, reaparece em qualquer ação) ----
     const setShow = useCallback((v: boolean) => { showRef.current = v; setShowCtrl(v); }, []);
     const reveal = useCallback(() => {
