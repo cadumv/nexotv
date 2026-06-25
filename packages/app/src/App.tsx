@@ -109,7 +109,13 @@ function spatialMove(dir: string): boolean {
         const score = primary + cross * 2.5;          // prioriza alinhamento na direção
         if (score < bestScore) { bestScore = score; best = el; }
     }
-    if (best) { best.focus(); best.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return true; }
+    if (best) {
+        best.focus();
+        // 'center' faz a tela ACOMPANHAR o foco (estilo TV/Netflix): ao descer pelas
+        // fileiras, a focada sobe pro centro; 'nearest' antes mal rolava (foco saía da tela).
+        best.scrollIntoView({ block: 'center', inline: 'center', behavior: 'auto' });
+        return true;
+    }
     return false;
 }
 
@@ -905,7 +911,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
         if (now && it?.kind === 'chan' && it.meta.id === curIdRef.current) { stageRef.current?.focus(); return; }
         setIdx(i);
         clearTimeout(timer.current);
-        timer.current = setTimeout(() => loadStream(i), now ? 0 : 200);  // debounce no zapping
+        timer.current = setTimeout(() => loadStream(i), now ? 0 : 120);  // debounce no zapping
         setTimeout(() => stageRef.current?.focus(), 0);  // foco no stage (não na linha)
     }, [loadStream, vflat]);
 

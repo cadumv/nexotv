@@ -198,7 +198,7 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 
 /* ---- Filmes e Séries: board (Stremio) + fileiras (Netflix) ---- */
 .vod-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.vod-board { position: relative; flex: 0 0 auto; height: 44vh; min-height: 300px; background-size: cover; background-position: center 18%; display: flex; align-items: flex-end; transition: background-image .25s ease; }
+.vod-board { position: relative; flex: 0 0 auto; height: 32vh; min-height: 210px; max-height: 360px; background-size: cover; background-position: center 18%; display: flex; align-items: flex-end; transition: background-image .25s ease; }
 .vb-grad { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(11,11,15,.96) 0%, rgba(11,11,15,.72) 38%, rgba(11,11,15,.15) 70%, transparent 100%), linear-gradient(0deg, #0b0b0f 2%, transparent 42%); }
 /* Sem backdrop: fundo escuro suave + pôster como miniatura à direita (Stremio). */
 .vod-board.noart { background: radial-gradient(120% 130% at 90% 10%, #20242e 0%, #121419 45%, #0b0b0f 100%); }
