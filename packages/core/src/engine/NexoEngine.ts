@@ -1,5 +1,5 @@
 /**
- * NexoEngine — orquestra catálogos/meta/stream do Rajada, independente de servidor.
+ * NexoEngine — orquestra catálogos/meta/stream do Proza, independente de servidor.
  * Porte do backend M3UEPGAddon, com deps injetadas (http/options) reusando o core.
  * v1: provedor Xtream (o usado). iptv-org/m3u podem ser adicionados depois.
  */
@@ -11,7 +11,7 @@ import { parseEPG, parseEpgChannelNames, normChannelName, getCurrentProgram, get
 import { parseM3U } from '../parsers/m3uParser';
 import { fetchTmdbMeta, resolveTmdbTitles, resolveImdbTitle } from '../meta/titleMatch';
 import { fetchSofascoreAgenda, AgendaConfig } from '../agenda/sofascoreAgenda';
-import { fetchXtreamData, fetchVodInfo, fetchSeriesInfo, XtreamOpts } from '../providers/xtreamProvider';
+import { fetchXtreamData, fetchXtreamEpgText, fetchVodInfo, fetchSeriesInfo, XtreamOpts } from '../providers/xtreamProvider';
 
 export interface EngineOptions {
     tmdbApiKey?: string | null;
@@ -32,6 +32,10 @@ export interface EngineOptions {
      *  passam por `${logoProxyBase}/img?u=<url>` (cacheado na borda, CORS:*),
      *  permitindo a detecção de fundo no cliente e evitando throttle do wsrv. */
     logoProxyBase?: string | null;
+    /** Parser de EPG fora da thread principal (ex.: Web Worker no app). Recebe o XML
+     *  e devolve {epgData, epgNames}. Se ausente/falhar, cai pro parse inline. Evita
+     *  o congelamento da TV ao processar um XMLTV grande. */
+    parseEpg?: (xml: string) => Promise<{ epgData: Record<string, any[]>; epgNames: Record<string, string> }>;
     log?: (level: 'debug' | 'warn' | 'error', msg: string, extra?: any) => void;
 }
 
@@ -115,21 +119,67 @@ export class NexoEngine {
         this.movieMap = new Map(); this.seriesMap = new Map();
         this._groupsMemo = null; this._logoIdx = null;
         this.buildTitleIndexes();
-        // Catálogo pesado (filmes/séries) + EPG em segundo plano.
-        this.vodReady = fetchXtreamData(this.http, cfg, { ...this._xopts, noLive: true })
-            .then((rest) => {
+        // Catálogo pesado (filmes/séries) em 2º plano. O EPG NÃO entra aqui: é carregado
+        // SOB DEMANDA (ensureEpg) ao abrir Canais, e parseado fora da thread principal
+        // (Web Worker, se o app injetar) — assim a TV não congela no boot.
+        this.vodReady = fetchXtreamData(this.http, cfg, { ...this._xopts, noLive: true, skipEpg: true })
+            .then(async (rest) => {
                 this.movies = rest.movies; this.series = rest.series;
-                this.epgData = rest.epgData; this.epgNames = (rest as any).epgNames || {};
                 this.movieMap = new Map(this.movies.map(m => [m.id, m]));
                 this.seriesMap = new Map(this.series.map(s => [s.id, s]));
                 this._groupsMemo = null; this._logoIdx = null;
-                this.buildTitleIndexes();
+                await this._buildTitleIndexesChunked();   // em pedaços, cedendo a thread (sem travar a UI)
             })
             .catch((e: any) => { this.options.log?.('warn', '[XTREAM] carga 2º plano falhou', e?.message); });
     }
 
-    /** Resolve quando o catálogo de VOD/séries/EPG terminou de carregar (2º plano). */
+    /** Resolve quando o catálogo de VOD/séries terminou de carregar (2º plano). */
     vodReady?: Promise<void>;
+    /** EPG carregado SOB DEMANDA (1ª vez que Canais é aberto). Memoizado. */
+    epgReady?: Promise<void>;
+
+    /** Garante o EPG carregado (idempotente). Busca o XMLTV e parseia — de preferência
+     *  num Web Worker (options.parseEpg); senão, parse inline. Não bloqueia o boot. */
+    ensureEpg(): Promise<void> {
+        if (this.epgReady) return this.epgReady;
+        const provider = this.config.provider || 'xtream';
+        if (provider !== 'xtream') return Promise.resolve();   // m3u já carrega EPG no load
+        this.epgReady = (async () => {
+            try {
+                const cfg = { ...this.config, enableEpg: true };
+                const xml = await fetchXtreamEpgText(this.http, cfg, this._xopts);
+                if (!xml) return;
+                let parsed: { epgData: Record<string, any[]>; epgNames: Record<string, string> } | null = null;
+                if (this.options.parseEpg) {
+                    try { parsed = await this.options.parseEpg(xml); }
+                    catch (e: any) { this.options.log?.('warn', '[EPG] worker falhou — parse inline', e?.message); }
+                }
+                if (!parsed) parsed = { epgData: await parseEPG(xml, { maxBytes: this.options.epgMaxBytes, log: this.options.log }), epgNames: parseEpgChannelNames(xml) };
+                this.epgData = parsed.epgData || {};
+                this.epgNames = parsed.epgNames || {};
+            } catch (e: any) { this.options.log?.('warn', '[EPG] carga sob demanda falhou', e?.message); }
+        })();
+        return this.epgReady;
+    }
+
+    private _yield() { return new Promise<void>(r => setTimeout(r, 0)); }
+    /** Igual a buildTitleIndexes, mas em blocos com pausas — não congela a TV com
+     *  milhares de filmes/séries. */
+    private async _buildTitleIndexesChunked() {
+        this.movieTitleIndex = new Map(); this.movieTitleYearIndex = new Map();
+        this.seriesTitleIndex = new Map(); this.seriesTitleYearIndex = new Map();
+        const CHUNK = 800;
+        const fill = (items: any[], byTitle: Map<string, any>, byYear: Map<string, any>, i: number) => {
+            for (let n = i; n < Math.min(i + CHUNK, items.length); n++) {
+                const it = items[n]; const key = normalizeTitle(it.name); if (!key) continue;
+                if (!byTitle.has(key)) byTitle.set(key, it);
+                const y = it.year ? String(it.year).slice(0, 4) : null;
+                if (y) { const yk = `${key}|${y}`; if (!byYear.has(yk)) byYear.set(yk, it); }
+            }
+        };
+        for (let i = 0; i < this.movies.length; i += CHUNK) { fill(this.movies, this.movieTitleIndex, this.movieTitleYearIndex, i); await this._yield(); }
+        for (let i = 0; i < this.series.length; i += CHUNK) { fill(this.series, this.seriesTitleIndex, this.seriesTitleYearIndex, i); await this._yield(); }
+    }
 
     /** Provedor M3U (lista .m3u/.m3u8) — cobre IPTV que não usa Xtream. */
     private async _loadM3U(): Promise<void> {
@@ -161,7 +211,7 @@ export class NexoEngine {
 
     getManifest() {
         const p = this.idPrefix;
-        const name = this.options.addonName || 'Rajada';
+        const name = this.options.addonName || 'Proza';
         const catalogs: any[] = [
             { type: 'tv', id: 'nexotv_games', name: 'Futebol Ao Vivo', extra: [{ name: 'skip' }], genres: [] },
             { type: 'tv', id: 'iptv_channels', name, extra: [{ name: 'genre', isRequired: false, options: [] }, { name: 'search', isRequired: false }, { name: 'skip' }], genres: [] },
@@ -184,7 +234,7 @@ export class NexoEngine {
             id: 'community.nexotv',
             version: '2.0.0',
             name,
-            description: 'Rajada',
+            description: 'Proza',
             resources: ['catalog', 'stream', 'meta'],
             types: ['tv', 'movie', 'series'],
             catalogs,
@@ -567,6 +617,55 @@ export class NexoEngine {
         const KW = ['esporte', 'sport', 'espn', 'sportv', 'premiere', 'dazn', 'combate', 'goat', 'caze', 'cazé', 'futebol', 'eurosport', 'tnt', 'fox sport', 'nsports', 'globo', 'record', 'sbt', 'band', 'rede tv', 'cnt', 'tv brasil', 'desimpedido'];
         return KW.some(k => s.includes(k));
     }
+    /** Canal DEDICADO a futebol/esporte ao vivo. Diferente de _isSportsChannel, NÃO
+     *  inclui abertas (Globo/SBT/Record/Band): nelas " x " no EPG quase sempre é nome de
+     *  PROGRAMA (novela, jornal, reality), não jogo — origem dos "jogos que não existem". */
+    _isFootballChannel(ch: any) {
+        const s = ((ch.name || '') + ' ' + (ch.category || '') + ' ' + (ch.attributes?.['group-title'] || '')).toLowerCase();
+        const KW = ['premiere', 'sportv', 'espn', 'tnt sport', 'dazn', 'caze', 'cazé', 'goat', 'nsports', 'n sports', 'eurosport', 'fox sport', 'desimpedido', 'onefootball', 'star+', 'disney', 'paramount', 'futebol'];
+        return KW.some(k => s.includes(k));
+    }
+    /** Tenta nomear o campeonato a partir de texto livre (título/desc/categoria do EPG
+     *  ou nome cru do Sofascore). Vazio = desconhecido (cai em "Outros jogos"). Série
+     *  B/C/D antes da Série A pra não casar errado. */
+    _tournamentFromText(s: string): string {
+        const t = stripAccents(s || '').toLowerCase();
+        if (!t) return '';
+        const map: [RegExp, string][] = [
+            [/serie b\b|brasileir\w* serie b/, 'Brasileirão Série B'],
+            [/serie c\b/, 'Brasileirão Série C'],
+            [/serie d\b/, 'Brasileirão Série D'],
+            [/brasileir|campeonato brasileiro|\bserie a\b|betano serie/, 'Brasileirão Série A'],
+            [/copa do brasil/, 'Copa do Brasil'],
+            [/libertador/, 'Libertadores'],
+            [/sul-?americ|sudameric/, 'Sul-Americana'],
+            [/recopa/, 'Recopa'],
+            [/copa do mundo|world cup|mundial de clubes|club world/, 'Copa do Mundo'],
+            [/eliminat[óo]ri|qualifier|qualifica/, 'Eliminatórias'],
+            [/champions|liga dos campe/, 'Champions League'],
+            [/europa league|liga europa/, 'Europa League'],
+            [/conference league/, 'Conference League'],
+            [/premier league|\binglesa\b|\bingles\b/, 'Premier League'],
+            [/la ?liga|\bespanhol/, 'La Liga'],
+            [/serie a italian|\bitalian|calcio/, 'Campeonato Italiano'],
+            [/bundesliga|\balem[ãa]/, 'Bundesliga'],
+            [/ligue ?1|\bfrances/, 'Campeonato Francês'],
+            [/saudi|saudita/, 'Liga Saudita'],
+            [/uefa nations|liga das na[çc]/, 'Liga das Nações'],
+            [/paulist/, 'Paulistão'],
+            [/carioca/, 'Carioca'],
+            [/mineiro/, 'Mineiro'],
+            [/ga[úu]cho/, 'Gaúcho'],
+            [/baiano/, 'Baiano'],
+            [/pernambucano/, 'Pernambucano'],
+            [/cearense/, 'Cearense'],
+            [/paranaense/, 'Paranaense'],
+            [/copa do nordeste|\bnordeste\b/, 'Copa do Nordeste'],
+            [/amistoso|friendly/, 'Amistoso'],
+        ];
+        for (const [re, name] of map) if (re.test(t)) return name;
+        return '';
+    }
     _channelQualityRank(ch: any) {
         const n = (ch?.name || '').toUpperCase();
         if (/\b(4K|UHD)\b/.test(n)) return 4;
@@ -673,6 +772,7 @@ export class NexoEngine {
     }
     static _TEAM_PT: Record<string, string> = {
         'brazil': 'Brasil', 'norway': 'Noruega', 'senegal': 'Senegal', 'england': 'Inglaterra', 'ghana': 'Gana', 'scotland': 'Escocia', 'czechia': 'Tchequia', 'czech republic': 'Tchequia', 'mexico': 'Mexico', 'jordan': 'Jordania', 'algeria': 'Argelia', 'france': 'Franca', 'iraq': 'Iraque', 'argentina': 'Argentina', 'austria': 'Austria', 'portugal': 'Portugal', 'uzbekistan': 'Uzbequistao', 'colombia': 'Colombia', 'switzerland': 'Suica', 'canada': 'Canada', 'spain': 'Espanha', 'germany': 'Alemanha', 'italy': 'Italia', 'netherlands': 'Holanda', 'belgium': 'Belgica', 'croatia': 'Croacia', 'uruguay': 'Uruguai', 'ukraine': 'Ucrania', 'united states': 'Estados Unidos', 'usa': 'Estados Unidos', 'south korea': 'Coreia do Sul', 'japan': 'Japao', 'morocco': 'Marrocos', 'denmark': 'Dinamarca', 'poland': 'Polonia', 'bulgaria': 'Bulgaria', 'congo dr': 'RD Congo', 'dr congo': 'RD Congo', 'south africa': 'Africa do Sul', 'sweden': 'Suecia', 'turkey': 'Turquia', 'turkiye': 'Turquia', 'qatar': 'Catar', 'haiti': 'Haiti', 'panama': 'Panama', 'ivory coast': 'Costa do Marfim', 'curacao': 'Curacao', 'bosnia & herzegovina': 'Bosnia e Herzegovina', 'bosnia and herzegovina': 'Bosnia e Herzegovina',
+        'paraguay': 'Paraguai', 'ecuador': 'Equador', 'egypt': 'Egito', "cote d'ivoire": 'Costa do Marfim', 'cape verde': 'Cabo Verde', 'peru': 'Peru', 'chile': 'Chile', 'bolivia': 'Bolivia', 'venezuela': 'Venezuela', 'saudi arabia': 'Arabia Saudita', 'iran': 'Ira', 'nigeria': 'Nigeria', 'cameroon': 'Camaroes', 'tunisia': 'Tunisia', 'new zealand': 'Nova Zelandia', 'costa rica': 'Costa Rica', 'honduras': 'Honduras', 'greece': 'Grecia', 'romania': 'Romenia', 'serbia': 'Servia', 'hungary': 'Hungria', 'slovenia': 'Eslovenia', 'slovakia': 'Eslovaquia', 'wales': 'Pais de Gales', 'ireland': 'Irlanda', 'northern ireland': 'Irlanda do Norte', 'finland': 'Finlandia', 'iceland': 'Islandia', 'russia': 'Russia', 'china': 'China', 'china pr': 'China', 'jamaica': 'Jamaica', 'new caledonia': 'Nova Caledonia',
     };
     _translateTeam(name: string) {
         const k = stripAccents(name || '').toLowerCase().trim();
@@ -753,9 +853,10 @@ export class NexoEngine {
         const now = Date.now();
         const minStart = now - 2 * 3600 * 1000;
         const horizon = now + 5 * 24 * 3600 * 1000;
-        const groups = new Map<string, { title: string; start: number; stop: number; chans: Map<string, any> }>();
+        const groups = new Map<string, { title: string; start: number; stop: number; chans: Map<string, any>; trn: string }>();
         for (const [epgId, progs] of Object.entries(this.epgData)) {
-            const chans = (chByEpg.get(epgId) || []).filter(c => this._isSportsChannel(c));
+            // SÓ canais dedicados a futebol — não as abertas (lá " x " é programa, não jogo).
+            const chans = (chByEpg.get(epgId) || []).filter(c => this._isFootballChannel(c));
             if (chans.length === 0) continue;
             for (const p of (progs as any[])) {
                 if (!p || p.start < minStart || p.start > horizon) continue;
@@ -764,8 +865,11 @@ export class NexoEngine {
                 const norm = title.toLowerCase().replace(/\s*-?\s*ao vivo/i, '').replace(/\s+/g, ' ').trim();
                 const d = new Date(p.start);
                 const key = `${norm}|${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-                if (!groups.has(key)) groups.set(key, { title, start: p.start, stop: p.stop || 0, chans: new Map() });
+                // Campeonato do jogo, classificado do título/descrição/categoria do EPG.
+                const trn = this._tournamentFromText(`${title} ${p.desc || ''} ${p.category || ''}`);
+                if (!groups.has(key)) groups.set(key, { title, start: p.start, stop: p.stop || 0, chans: new Map(), trn });
                 const g = groups.get(key)!;
+                if (!g.trn && trn) g.trn = trn;
                 if (p.start < g.start) g.start = p.start;
                 if ((p.stop || 0) > g.stop) g.stop = p.stop || 0;
                 for (const c of chans) if (!g.chans.has(c.id)) g.chans.set(c.id, c);
@@ -783,27 +887,98 @@ export class NexoEngine {
         }
         const epgOut: any[] = [];
         for (const g of groups.values()) {
-            epgOut.push({ title: g.title, start: g.start, stop: g.stop, channels: this._dedupGameChannels([...g.chans.values()]) });
+            epgOut.push({ title: g.title, start: g.start, stop: g.stop, channels: this._dedupGameChannels([...g.chans.values()]), tournament: g.trn || '' });
         }
         let merged = epgOut;
         try {
             const sofaGames = await this._buildSofaGames();
             if (sofaGames.length) {
+                const matchedEpg = new Set<any>();
                 for (const sg of sofaGames) {
                     const st = this._teamTokens(sg.title);
                     for (const eg of epgOut) {
                         if (Math.abs(sg.start - eg.start) > 3 * 3600 * 1000) continue;
                         if (!this._teamsOverlap(st, this._teamTokens(eg.title))) continue;
+                        matchedEpg.add(eg);
                         const ids = new Set(sg.channels.map((c: any) => c.id));
                         for (const c of eg.channels) if (!ids.has(c.id)) sg.channels.push(c);
                     }
                     sg.channels = sg.channels.sort((a: any, b: any) => this._channelQualityRank(b) - this._channelQualityRank(a)).slice(0, 20);
                 }
-                merged = sofaGames;
+                // UNIÃO (não substituição): a agenda Sofascore só cobre os canais BR
+                // conhecidos (Premiere/Globo/ESPN…) — fora dela cai Brasileirão e pouco
+                // mais. Os jogos detectados pelo EPG que NÃO casaram com a agenda (outros
+                // campeonatos: Champions, estaduais, etc.) PERMANECEM na lista. Antes
+                // `merged = sofaGames` os jogava fora → na TV só sobrava o Brasileirão.
+                const extra = epgOut.filter(eg => !matchedEpg.has(eg) && eg.channels.length);
+                merged = [...sofaGames, ...extra];
             }
         } catch (e: any) { this.options.log?.('warn', '[GAMES] sofa merge failed', e?.message); }
+        // 3ª fonte (APOSENTADA): antes buscávamos grandes torneios (Copa do Mundo) direto
+        // da API pública do Sofascore. Agora o Worker `/agenda` cobre QUALQUER campeonato
+        // por torneio via RapidAPI (confiável, com filtro de placeholders/qualifiers), então
+        // este fallback ficou redundante E sujava a lista (trazia chaves indefinidas tipo
+        // "W75"/"W74" que a API pública não filtra). Mantido o método `_buildPublicCupGames`
+        // apenas como emergência manual; NÃO é mais chamado automaticamente.
         merged.sort((a, b) => (this._isGameLive(b, now) ? 1 : 0) - (this._isGameLive(a, now) ? 1 : 0) || a.start - b.start);
         return merged;
+    }
+
+    // Grandes torneios cujos jogos o Worker por-canal não captura — buscados direto da
+    // API PÚBLICA do Sofascore (grátis, sem chave; precisa User-Agent de navegador).
+    // broadcasters = palavras-chave dos canais que transmitem (casadas na lista do user).
+    private static PUBLIC_TOURNAMENTS: { id: number; broadcasters: string[] }[] = [
+        { id: 16, broadcasters: ['globo', 'sportv', 'caze', 'ge tv', 'sbt'] },   // Copa do Mundo
+    ];
+    private _cupCache: { ts: number; data: any[] } | null = null;
+
+    private async _sofaPublicGet(path: string): Promise<any | null> {
+        try {
+            const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
+            const r: any = await this.http.get(`https://api.sofascore.com/api/v1${path}`, { timeoutMs: 10000, headers: { 'User-Agent': ua, 'Accept': 'application/json' } as any });
+            if (!r || !r.ok) return null;
+            return await r.json();
+        } catch { return null; }
+    }
+
+    async _buildPublicCupGames(): Promise<any[]> {
+        const now = Date.now();
+        if (this._cupCache && now - this._cupCache.ts < 30 * 60 * 1000) return this._cupCache.data;
+        const minStart = now - 3 * 3600 * 1000;
+        const horizon = now + 6 * 24 * 3600 * 1000;
+        const baseList = this.channels.map(c => ({ c, base: this._iptvBase(c.name) }));
+        const out: any[] = [];
+        for (const t of NexoEngine.PUBLIC_TOURNAMENTS) {
+            const seasons = await this._sofaPublicGet(`/unique-tournament/${t.id}/seasons`);
+            const sid = seasons?.seasons?.[0]?.id;
+            if (!sid) continue;
+            // próximos + recentes (cobre ao vivo) em paralelo
+            const [next, last] = await Promise.all([
+                this._sofaPublicGet(`/unique-tournament/${t.id}/season/${sid}/events/next/0`),
+                this._sofaPublicGet(`/unique-tournament/${t.id}/season/${sid}/events/last/0`),
+            ]);
+            const evs = [...(next?.events || []), ...(last?.events || [])];
+            if (!evs.length) continue;
+            // canais (broadcasters) presentes na lista do usuário, deduplicados por emissora/qualidade
+            const chans = this._dedupGameChannels(baseList.filter(x => t.broadcasters.some(b => x.base.includes(b))).map(x => x.c), 12);
+            if (!chans.length) continue;
+            const seen = new Set<string>();
+            for (const e of evs) {
+                const ts = e?.startTimestamp; const home = e?.homeTeam?.name, away = e?.awayTeam?.name;
+                if (!ts || !home || !away) continue;
+                const startMs = ts * 1000;
+                if (startMs < minStart || startMs > horizon) continue;
+                const k = `${home}|${away}|${startMs}`; if (seen.has(k)) continue; seen.add(k);
+                const tn = e?.tournament?.name || e?.tournament?.uniqueTournament?.name || '';
+                out.push({
+                    title: `${this._translateTeam(home)} x ${this._translateTeam(away)}`,
+                    start: startMs, stop: startMs + 2.5 * 3600 * 1000,
+                    channels: chans, tournament: this._tournamentFromText(tn) || tn,
+                });
+            }
+        }
+        this._cupCache = { ts: now, data: out };
+        return out;
     }
 
     generateGamePreview(g: any) {

@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import Hls from 'hls.js';
-import { attachAdaptive } from './player';
+import { attachAdaptive, createThumbnailer, type Thumbnailer } from './player';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
-import { createEngine, tmdbPoster } from './engineHost';
+import { createEngine, tmdbPoster, tmdbTrendingPoster } from './engineHost';
 
-const LS_KEY = 'rajada.config.v1';
+const LS_KEY = 'proza.config.v1';
 
 interface SavedConfig { config: AddonConfig; options: EngineOptions; }
 
@@ -22,7 +22,7 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
     const [agenda, setAgenda] = useState('');
     const [tmdb, setTmdb] = useState('');
     const save = () => {
-        const options: EngineOptions = { addonName: 'Rajada', sofascoreAgendaUrl: agenda.trim() || null, tmdbApiKey: tmdb.trim() || null };
+        const options: EngineOptions = { addonName: 'Proza', sofascoreAgendaUrl: agenda.trim() || null, tmdbApiKey: tmdb.trim() || null };
         if (mode === 'xtream') {
             onSave({ config: { provider: 'xtream', xtreamUrl: url.trim(), xtreamUsername: user.trim(), xtreamPassword: pass.trim(), enableVod: true }, options });
         } else {
@@ -31,7 +31,7 @@ function Setup({ onSave }: { onSave: (s: SavedConfig) => void }) {
     };
     return (
         <div className="setup">
-            <h1 className="brand">RAJADA</h1>
+            <h1 className="brand">Proza</h1>
             <div className="tabs">
                 <button className={mode === 'xtream' ? 'on' : ''} onClick={() => setMode('xtream')}>Xtream</button>
                 <button className={mode === 'm3u' ? 'on' : ''} onClick={() => setMode('m3u')}>Lista M3U</button>
@@ -57,6 +57,30 @@ type Section = 'pick' | 'vod' | 'channels' | 'games';
 // 'chan' é um canal. Permite zapear ↑↓ atravessando categorias (com divisor visível).
 interface FlatItem { kind: 'header' | 'chan'; name: string; catId: string; meta?: any; }
 
+// Aparelho de BAIXA POTÊNCIA (Fire TV / smart TV / Android TV): CPU/GPU fracos, e o
+// provedor IPTV limita a ~2 conexões simultâneas. Nesses, o pré-carregamento em 2ª
+// janela (2º decode + 2º worker hls + 2ª conexão) ROUBA recurso do stream principal e
+// o faz TRAVAR enquanto se assiste. Aqui detectamos pra: desligar o prefetch, usar
+// buffer maior (mais liso) e limitar a quantidade de cards renderados (menos lag).
+const LOW_POWER: boolean = (() => {
+    try {
+        const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+        // Fire TV (AFT*), Tizen (Samsung), WebOS (LG), Android TV / Google TV, smart TVs.
+        if (/\bAFT|BRAVIA|Tizen|Web0?S|GoogleTV|Google TV|SMART[-\s]?TV|HbbTV|NetCast|VIDAA|DTV|Roku\b/i.test(ua)) return true;
+        if (/Android/i.test(ua) && /\bTV\b/i.test(ua)) return true;
+        const hc = (typeof navigator !== 'undefined' && (navigator as any).hardwareConcurrency) || 0;
+        if (hc > 0 && hc <= 2) return true;
+    } catch { }
+    return false;
+})();
+
+// Limites de renderização (anti-lag). Cada card é um <button> + <img>; a aba "Tudo"
+// chegava a renderizar MILHARES → travava a navegação (cada seta varre todos os
+// focáveis com getBoundingClientRect). As fileiras da home são prévias (cap baixo) e o
+// grid de categoria carrega em páginas (botão "carregar mais").
+const ROW_CAP = LOW_POWER ? 18 : 40;        // máx. de cards por fileira na home
+const GRID_PAGE = LOW_POWER ? 60 : 120;     // 1ª página do grid de uma categoria
+
 // --- Navegação por D-pad (controle de TV): movimento espacial do foco -----------
 // Elementos focáveis VISÍVEIS na tela.
 function navFocusables(): HTMLElement[] {
@@ -72,7 +96,7 @@ function navFocusables(): HTMLElement[] {
         if (stage) root = stage;
     }
     return Array.from(root.querySelectorAll<HTMLElement>(sel))
-        // tabindex="-1" (ex.: logo RAJADA) NÃO é alvo de D-pad, mesmo sendo <button>.
+        // tabindex="-1" (ex.: logo Proza) NÃO é alvo de D-pad, mesmo sendo <button>.
         .filter(el => el.tabIndex !== -1 && el.offsetWidth > 0 && el.offsetHeight > 0 && el.getClientRects().length > 0);
 }
 
@@ -175,7 +199,7 @@ function App() {
     const [playing, setPlaying] = useState<{ url: string; title: string; key?: string; resumeFrom?: number } | null>(null);
     const [details, setDetails] = useState<any | null>(null); // tela de detalhes (filme/série)
     const [search, setSearch] = useState(false);              // overlay de busca
-    const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('rajada.cw.v1') || '[]'); } catch { return []; } });
+    const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('proza.cw.v1') || '[]'); } catch { return []; } });
     const homeRef = useRef<HTMLDivElement>(null);
     const builtRef = useRef({ vod: false, channels: false, games: false });
 
@@ -183,7 +207,7 @@ function App() {
         setCw(prev => {
             const next = [{ id: meta.id, name: meta.name, poster: meta.poster, posterChain: meta.posterChain, posterShape: meta.posterShape, type: meta.type },
             ...prev.filter((x: any) => x.id !== meta.id)].slice(0, 20);
-            localStorage.setItem('rajada.cw.v1', JSON.stringify(next));
+            localStorage.setItem('proza.cw.v1', JSON.stringify(next));
             return next;
         });
     };
@@ -260,8 +284,12 @@ function App() {
         const buildRows = async (defs: any[]) => (await Promise.all(defs.filter(Boolean).map(async (c: any) => {
             try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return metas.length ? { id: c.id, type: c.type, name: c.name, metas: metas.slice(0, 30) } as Row : null; } catch { return null; }
         }))).filter(Boolean) as Row[];
-        const mr = await buildRows([pick('nexotv_vod'), ...cats.filter((c: any) => c.id.startsWith('nexotv_vod_g_')).slice(0, 8)]);
-        const sr = await buildRows([pick('nexotv_series'), ...cats.filter((c: any) => c.id.startsWith('nexotv_series_g_')).slice(0, 6)]);
+        // Exclui grupos do provedor com o MESMO nome do base ("Filmes"/"Series") — são
+        // catch-alls degenerados (ex.: um grupo "Filmes" com 1 item) que apareciam como
+        // uma fileira "Filmes" de 1 item, confusa, ao lado do base que tem todos.
+        const dupBase = (c: any, base: string) => (c.name || '').trim().toLowerCase() === base.toLowerCase();
+        const mr = await buildRows([pick('nexotv_vod'), ...cats.filter((c: any) => c.id.startsWith('nexotv_vod_g_') && !dupBase(c, 'Filmes')).slice(0, 8)]);
+        const sr = await buildRows([pick('nexotv_series'), ...cats.filter((c: any) => c.id.startsWith('nexotv_series_g_') && !dupBase(c, 'Series')).slice(0, 6)]);
         setMovieRows(mr); setSeriesRows(sr); setVodLoading(false);
         // Posters TMDB faltantes em 2º plano (estilo Stremio).
         if (opts.tmdbApiKey) {
@@ -276,12 +304,22 @@ function App() {
 
     const buildChannels = useCallback(async (eng: NexoEngine) => {
         setChanLoading(true);
+        (eng as any).ensureEpg?.();   // EPG sob demanda: começa a carregar/parsear (em Worker) ao abrir Canais
         const cats: any[] = eng.getManifest().catalogs;
         // Só categorias de canais (os jogos têm seção própria agora).
         const defs = cats.filter((c: any) => c.id.startsWith('iptv_channels_g_'));
-        const results = await Promise.all(defs.map(async (c: any) => {
-            try { const { metas } = await eng.getCatalog({ type: c.type, id: c.id }); return { c, metas }; } catch { return { c, metas: [] as any[] }; }
-        }));
+        // Pagina cada categoria até trazer TODOS os canais (getCatalog devolve ~100/página).
+        const fetchAllChans = async (c: any) => {
+            const PAGE = 100; const all: any[] = [];
+            for (let skip = 0; skip < 6000; skip += PAGE) {
+                let metas: any[] = [];
+                try { ({ metas } = await eng.getCatalog({ type: c.type, id: c.id, extra: { skip: String(skip) } })); } catch { break; }
+                all.push(...(metas || []));
+                if (!metas || metas.length < PAGE) break;
+            }
+            return { c, metas: all };
+        };
+        const results = await Promise.all(defs.map(fetchAllChans));
         // Categorias da que tem MENOS conteúdo pra que tem MAIS (as gigantes ficam
         // no fim, pra não obrigar a rolar logo de cara).
         results.sort((a, b) => a.metas.length - b.metas.length);
@@ -298,12 +336,24 @@ function App() {
 
     const buildGames = useCallback(async (eng: NexoEngine) => {
         setGamesLoading(true);
+        // Carga IMEDIATA: os campeonatos vêm da agenda (Worker) + canais já carregados
+        // na 1ª fase — NÃO dependem do EPG/VOD do 2º plano. No nativo (TV) esse 2º plano
+        // baixa um catálogo enorme e demora/trava; bloquear os Jogos nele deixava a tela
+        // vazia na TV (no notebook resolvia rápido, por isso só falhava na TV).
         try {
-            await (eng as any).vodReady;   // jogos dependem do EPG, que carrega no 2º plano
-            const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' }); setGamesMetas(metas || []);
-        }
-        catch { setGamesMetas([]); }
+            const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' });
+            setGamesMetas(metas || []);
+        } catch { setGamesMetas([]); }
         setGamesLoading(false);
+        // Enriquece com os jogos casados pelo EPG. Dispara o EPG SOB DEMANDA (leve, em
+        // Worker) em vez de esperar o `vodReady` (fase 2 = baixar o VOD inteiro, que na
+        // TV trava/demora demais). Sem o EPG só vinha a agenda (≈ só Brasileirão); com ele
+        // entram os demais campeonatos — igual ao navegador.
+        try {
+            await (eng as any).ensureEpg?.();
+            const { metas } = await eng.getCatalog({ type: 'tv', id: 'nexotv_games' });
+            if (metas && metas.length) setGamesMetas(metas);
+        } catch { /* mantém a carga imediata */ }
     }, []);
 
     // Constrói a seção ao entrar nela (uma vez).
@@ -314,43 +364,41 @@ function App() {
         if (section === 'games' && !builtRef.current.games) { builtRef.current.games = true; buildGames(engine); }
     }, [section, engine, saved, buildVod, buildChannels, buildGames]);
 
-    // Arte cinematográfica dos cards (estilo Netflix): backdrop real de um filme da
-    // biblioteca + foto de futebol (TMDB). Em 2º plano — cards mostram o gradiente até lá.
+    // Arte dos cards da tela inicial (estilo Netflix). Os TRÊS carregam EM PARALELO e
+    // cada um aparece assim que fica pronto (não espera os outros). O card de Filmes
+    // NÃO depende mais do catálogo do 2º plano: usa um pôster em alta do TMDB na hora
+    // (e, se a biblioteca já estiver carregada, prefere um pôster real dela).
     useEffect(() => {
         if (!engine) return;
         let dead = false;
+        const set = (k: 'vod' | 'tv' | 'live', v?: string | null) => { if (!dead && v) setPickArt(p => ({ ...p, [k]: v })); };
         (async () => {
-            let vod: string | undefined;
             try {
-                const cats: any[] = engine.getManifest().catalogs;
-                const c = cats.find((x: any) => x.id === 'nexotv_vod');
-                if (c) {
-                    const { metas } = await engine.getCatalog({ type: c.type, id: c.id });
-                    // pôster retrato real (encaixa no card 2:3)
-                    const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
-                    if (withP) vod = withP.poster;
-                    else if (metas[0]) vod = (await engine.getTmdbPosterFor(metas[0].id).catch(() => null)) || undefined;
-                }
-            } catch { /* fallback gradiente */ }
-            const tv = (await tmdbPoster('jornal nacional').catch(() => null)) || (await tmdbPoster('telejornal').catch(() => null)) || undefined;
-            const live = (await tmdbPoster('Pelé').catch(() => null)) || (await tmdbPoster('Ronaldo').catch(() => null))
-                || (await tmdbPoster('Maradona').catch(() => null)) || (await tmdbPoster('Quero ser campeão').catch(() => null)) || undefined;
-            if (!dead) setPickArt({ vod, tv, live });
+                const { metas } = await engine.getCatalog({ type: 'movie', id: 'nexotv_vod' });
+                const withP = metas.find((m: any) => m.poster && !/placehold/.test(m.poster));
+                if (withP) { set('vod', withP.poster); return; }
+            } catch { /* sem catálogo ainda → TMDB abaixo */ }
+            set('vod', await tmdbTrendingPoster().catch(() => null));
         })();
+        (async () => set('tv', (await tmdbPoster('jornal nacional').catch(() => null)) || (await tmdbPoster('telejornal').catch(() => null))))();
+        (async () => set('live', (await tmdbPoster('Pelé').catch(() => null)) || (await tmdbPoster('Ronaldo').catch(() => null)) || (await tmdbPoster('Maradona').catch(() => null))))();
         return () => { dead = true; };
     }, [engine]);
 
     const logout = () => { localStorage.removeItem(LS_KEY); setSaved(null); setEngine(null); setSection('pick'); builtRef.current = { vod: false, channels: false, games: false }; };
 
     if (!saved) return <Setup onSave={(s) => { localStorage.setItem(LS_KEY, JSON.stringify(s)); setSaved(s); }} />;
-    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status={!engine ? (status || 'Conectando…') : ''} art={pickArt} />;
+    // Enquanto conecta ao provedor (IPTV pode demorar), mostra um loading da marca ANTES
+    // da tela de seleção — evita os cards aparecerem sem imagem / entrar numa seção vazia.
+    if (section === 'pick' && !engine) return <BootScreen status={status || 'Conectando ao provedor…'} error={/^erro/i.test(status)} />;
+    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status="" art={pickArt} />;
 
     const cwAll = cw.filter((m: any) => m.type === 'movie' || m.type === 'series');
 
     return (
         <div className={`home ${section}`} ref={homeRef}>
             <header className="topbar">
-                <button className="brand-sm" tabIndex={-1} onClick={() => setSection('pick')}>RAJADA</button>
+                <button className="brand-sm" tabIndex={-1} onClick={() => setSection('pick')}>Proza</button>
                 <nav className="tabs-top">
                     <button className={section === 'vod' ? 'on' : ''} onClick={() => setSection('vod')}>Filmes e Séries</button>
                     <button className={section === 'channels' ? 'on' : ''} onClick={() => setSection('channels')}>Canais</button>
@@ -401,6 +449,18 @@ function App() {
     );
 }
 
+/** Loading da marca exibido enquanto conecta ao provedor (antes da tela de seleção).
+ *  IPTV pode demorar a responder — melhor um loading claro do que cards vazios. */
+function BootScreen({ status, error }: { status: string; error?: boolean }) {
+    return (
+        <div className="boot">
+            <div className="boot-mark">Proza</div>
+            {!error && <span className="boot-spin" />}
+            <div className={`boot-status${error ? ' err' : ''}`}>{status}</div>
+        </div>
+    );
+}
+
 /** Tela inicial estilo Netflix: pirâmide invertida (2 billboards em cima + 1
  *  embaixo), cada um com BACKDROP real, gradiente forte e tipografia premium. */
 function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) => void; onLogout: () => void; status: string; art: { vod?: string; tv?: string; live?: string } }) {
@@ -415,7 +475,7 @@ function PickScreen({ onPick, onLogout, status, art }: { onPick: (s: Section) =>
     );
     return (
         <div className="pick">
-            <header className="pick-top"><span className="brand-sm">RAJADA</span><button className="logout" onClick={onLogout}>sair</button></header>
+            <header className="pick-top"><span className="brand-sm">Proza</span><button className="logout" onClick={onLogout}>sair</button></header>
             <div className="pick-body">
                 <h2 className="pick-sub">O que você quer assistir?</h2>
                 <div className="pick-cards">
@@ -662,6 +722,42 @@ function groupGames(metas: any[]): { live: any[]; upcoming: any[]; ordered: [str
  *  GameStage (player + lista lateral pra trocar de jogo), igual aos Canais. */
 function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[]; loading: boolean }) {
     const [watch, setWatch] = useState<any | null>(null);
+    const gridRef = useRef<HTMLDivElement>(null);
+    // Navegação VERTICAL explícita (↑/↓) entre hero e fileiras de jogos. Sem isso a
+    // geometria global (spatialMove) pulava da 2ª fileira direto pras abas do topo (o
+    // scroll centraliza o card e a fileira de cima sai da tela). Aqui pulamos pra
+    // faixa vizinha preservando a COLUNA; só ↑ no hero/1ª faixa sobe pras abas.
+    const onGamesKey = useCallback((e: React.KeyboardEvent) => {
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+        const sc = gridRef.current; if (!sc) return;
+        const a = document.activeElement as HTMLElement | null; if (!a || !sc.contains(a)) return;
+        const groups: HTMLElement[][] = [];
+        const hero = sc.querySelector<HTMLElement>('.games-hero .game-card'); if (hero) groups.push([hero]);
+        for (const s of sc.querySelectorAll('section.row')) {
+            const t = [...s.querySelectorAll<HTMLElement>('.game-card')]; if (t.length) groups.push(t);
+        }
+        const gi = groups.findIndex(g => g.includes(a));
+        if (gi < 0) return;            // foco fora das faixas → deixa a geometria global agir
+        e.preventDefault(); e.stopPropagation();
+        const ni = gi + (e.key === 'ArrowDown' ? 1 : -1);
+        if (ni < 0) { focusTopbar(); return; }   // acima do hero → abas do topo
+        if (ni >= groups.length) return;          // abaixo da última fileira → permanece
+        const target = groups[ni];
+        const c = a.getBoundingClientRect(); const cx = (c.left + c.right) / 2;
+        let best = target[0], bd = Infinity;
+        for (const el of target) { const r = el.getBoundingClientRect(); const d = Math.abs((r.left + r.right) / 2 - cx); if (d < bd) { bd = d; best = el; } }
+        best.focus({ preventScroll: true });
+        // Enquadramento estável (não corta ao voltar pra cima): hero → topo total;
+        // fileira → encosta o título no topo do grid; senão centraliza.
+        if (ni === 0) { sc.scrollTo({ top: 0, behavior: 'auto' }); return; }
+        const sec = best.closest('section.row') as HTMLElement | null;
+        if (sec) {
+            const delta = sec.getBoundingClientRect().top - (sc.getBoundingClientRect().top + 12);
+            sc.scrollBy({ top: delta, behavior: 'auto' });
+        } else {
+            best.scrollIntoView({ block: 'center', inline: 'nearest' });
+        }
+    }, []);
     if (loading && !metas.length) return <div className="status">Carregando jogos…</div>;
     if (!loading && !metas.length) return <div className="status">Nenhum jogo encontrado agora. Confira mais tarde.</div>;
     if (watch) return <GameStage engine={engine} metas={metas} start={watch} onBack={() => setWatch(null)} />;
@@ -671,7 +767,7 @@ function GamesView({ engine, metas, loading }: { engine: NexoEngine; metas: any[
     const up = upcoming.filter((m: any) => m !== featured);
     const grpFiltered = ordered.map(([n, l]) => [n, l.filter((m: any) => m !== featured)] as [string, any[]]).filter(([, l]) => l.length);
     return (
-        <div className="games-grid">
+        <div className="games-grid" ref={gridRef} onKeyDown={onGamesKey}>
             {featured && (
                 <div className="games-hero">
                     <GameCard meta={featured} onPlay={() => setWatch(featured)} hero />
@@ -761,11 +857,38 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
         select(si >= 0 ? si : (gameIdxs[0] ?? 0), true);
     }, [gflat, gameIdxs, start, select]);
 
+    const dirRef = useRef<1 | -1>(1);
+    const [prefetch, setPrefetch] = useState<string[]>([]);
     const move = (dir: 1 | -1) => {
+        dirRef.current = dir;
         const pos = gameIdxs.indexOf(idx);
         const np = Math.max(0, Math.min(gameIdxs.length - 1, pos + dir));
         select(gameIdxs[np]);
     };
+    // Zap em TELA CHEIA (↑/↓ no player): troca de jogo sem refocar o stage.
+    const zapFs = useCallback((dir: 1 | -1) => {
+        dirRef.current = dir;
+        const pos = gameIdxs.indexOf(idx);
+        const np = Math.max(0, Math.min(gameIdxs.length - 1, pos + dir));
+        const i = gameIdxs[np]; if (i == null || i === idx) return;
+        setIdx(i);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => loadStream(i), 80);   // coalesce ao segurar ↑/↓
+        setTimeout(() => scrollRef.current?.querySelector(`[data-i="${i}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
+    }, [gameIdxs, idx, loadStream]);
+    // PREFETCH do próximo jogo (na direção do zap), ~0,6s após assentar.
+    useEffect(() => {
+        if (LOW_POWER) return;   // TV: prefetch desligado (ver prefetchInto)
+        let dead = false;
+        const h = setTimeout(async () => {
+            const pos = gameIdxs.indexOf(idx);
+            const ni = pos < 0 ? -1 : gameIdxs[pos + dirRef.current];
+            const it = ni != null && ni >= 0 ? gflat[ni] : null;
+            if (!it || it.kind !== 'game') { if (!dead) setPrefetch([]); return; }
+            try { const s = await engine.getStreams(it.meta.id); if (!dead) setPrefetch(dedupStreams(s)[0]?.urls || []); } catch { }
+        }, 600);
+        return () => { dead = true; clearTimeout(h); };
+    }, [idx, gameIdxs, gflat, engine]);
     const onKey = (e: React.KeyboardEvent) => stageNav(e, stageRef.current, move, onBack);
 
     return (
@@ -786,7 +909,7 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer sources={sources} title={title}
+                <LivePlayer sources={sources} title={title} onZap={zapFs} prefetch={prefetch}
                     options={dedupStreams(opts).map(o => ({ label: o.label, urls: o.urls }))}
                     onPick={(urls) => setSources(urls)} />
                 <div className="chan-now">
@@ -807,7 +930,7 @@ function GameStage({ engine, metas, start, onBack }: { engine: NexoEngine; metas
 }
 
 // Histórico local de canais assistidos (pra seção "Mais assistidos").
-const WATCH_KEY = 'rajada.chanwatch.v1';
+const WATCH_KEY = 'proza.chanwatch.v1';
 function loadWatch(): Record<string, number> { try { return JSON.parse(localStorage.getItem(WATCH_KEY) || '{}'); } catch { return {}; } }
 // Ranking de popularidade (semente p/ "Mais assistidos" sem histórico). O 1º = mais
 // popular. O uso real do usuário (watch) sobrepõe isso com o tempo.
@@ -848,6 +971,18 @@ function ChannelsView({ engine, cats, flat, loading }: {
 
     // Limpa o timer de "assistido" ao sair da tela.
     useEffect(() => () => clearTimeout(watchTimer.current), []);
+
+    // EPG sob demanda: quando terminar de carregar/parsear (Worker), atualiza o
+    // "agora/a seguir" do canal que já está tocando (a 1ª seleção pode ter ocorrido
+    // antes do EPG ficar pronto → mostrava só "AO VIVO").
+    useEffect(() => {
+        let dead = false;
+        (engine as any).ensureEpg?.().then(() => {
+            const id = curIdRef.current; if (dead || !id) return;
+            engine.getDetailedMeta(id).then((dm: any) => { if (!dead) setEpg(parseEpgDesc(dm?.description)); }).catch(() => { });
+        });
+        return () => { dead = true; };
+    }, [engine]);
 
     // Lista de exibição: prepend "Mais assistidos" (pelo histórico local) se houver.
     const { vflat, vcats, vCatFirst } = useMemo(() => {
@@ -976,11 +1111,40 @@ function ChannelsView({ engine, cats, flat, loading }: {
     // Recalcula a categoria do topo ao trocar a lista/modo.
     useEffect(() => { applyTopCat(); return () => { if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } }; }, [vflat, mode, applyTopCat]);
 
+    const dirRef = useRef<1 | -1>(1);                       // última direção de zap (p/ prever o vizinho)
+    const [prefetch, setPrefetch] = useState<string[]>([]); // fonte do próximo canal (pré-carregar)
     const move = (dir: 1 | -1) => {
+        dirRef.current = dir;
         const pos = chanIdxs.indexOf(idx);
         const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
         select(chanIdxs[np]);
     };
+    // Zap em TELA CHEIA (↑/↓ no player): troca de canal sem refocar o stage — o player
+    // continua focado e a lista atrás acompanha (idx → scroll). loadStream troca a fonte
+    // na MESMA instância de vídeo, sem sair da tela cheia.
+    const zapFs = useCallback((dir: 1 | -1) => {
+        dirRef.current = dir;
+        const pos = chanIdxs.indexOf(idx);
+        const np = Math.max(0, Math.min(chanIdxs.length - 1, pos + dir));
+        const i = chanIdxs[np]; if (i == null || i === idx) return;
+        setIdx(i);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => loadStream(i), 80);   // coalesce ao segurar ↑/↓ (não carrega os do meio)
+    }, [chanIdxs, idx, loadStream]);
+    // PREFETCH: ~0,6s após assentar num canal, pré-carrega o PRÓXIMO na direção do zap
+    // (só quando a pessoa para — não durante zap rápido, pra poupar banda).
+    useEffect(() => {
+        if (LOW_POWER) return;   // TV: prefetch desligado (ver prefetchInto) — não computa o vizinho
+        let dead = false;
+        const h = setTimeout(async () => {
+            const pos = chanIdxs.indexOf(idx);
+            const ni = pos < 0 ? -1 : chanIdxs[pos + dirRef.current];
+            const it = ni != null && ni >= 0 ? vflat[ni] : null;
+            if (!it || it.kind !== 'chan') { if (!dead) setPrefetch([]); return; }
+            try { const s = await engine.getStreams(it.meta.id); if (!dead) setPrefetch(dedupStreams(s)[0]?.urls || []); } catch { }
+        }, 600);
+        return () => { dead = true; clearTimeout(h); };
+    }, [idx, chanIdxs, vflat, engine]);
     const selectNow = useCallback((i: number) => select(i, true), [select]);  // estável p/ memo das linhas
     // Navegação LISA da lista de categorias: ↑↓ move o foco entre as categorias
     // (roving focus + scroll), Enter seleciona (onClick do botão), Voltar volta.
@@ -1057,7 +1221,7 @@ function ChannelsView({ engine, cats, flat, loading }: {
                 </div>
             </aside>
             <main className="chan-stage">
-                <LivePlayer sources={sources} title={title}
+                <LivePlayer sources={sources} title={title} onZap={zapFs} prefetch={prefetch}
                     options={streamOptions(opts).map(o => ({ label: o.label, urls: [o.url] }))}
                     onPick={(urls) => { const all = streamOptions(opts).map(o => o.url); setSources([urls[0], ...all.filter(u => u !== urls[0])]); }} />
                 <div className="chan-now">
@@ -1091,107 +1255,201 @@ function ChannelsView({ engine, cats, flat, loading }: {
     );
 }
 
+/** Ícones SVG próprios do player Proza (sem emoji) — herdam a cor do botão
+ *  (currentColor), então o foco vermelho/branco se aplica sozinho. */
+function RIcon({ n }: { n: string }) {
+    const c = { viewBox: '0 0 24 24', width: 24, height: 24, fill: 'currentColor', 'aria-hidden': true } as any;
+    switch (n) {
+        case 'play': return <svg {...c}><path d="M8 5v14l11-7z" /></svg>;
+        case 'pause': return <svg {...c}><path d="M6 5h4v14H6zM14 5h4v14h-4z" /></svg>;
+        case 'back': return <svg {...c}><path d="M11 18V6L3 12l8 6zm9 0V6l-8 6 8 6z" /></svg>;
+        case 'fwd': return <svg {...c}><path d="M13 6v12l8-6-8-6zM4 6v12l8-6-8-6z" /></svg>;
+        case 'vol': return <svg {...c}><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16 8.6a4 4 0 0 1 0 6.8M18.7 6a7.5 7.5 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>;
+        case 'mute': return <svg {...c}><path d="M4 9v6h4l5 5V4L8 9H4z" /><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>;
+        case 'fs': return <svg {...c}><path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM6 15v3h3v2H4v-5h2zm12 0h2v5h-5v-2h3v-3z" /></svg>;
+        case 'fsExit': return <svg {...c}><path d="M9 4v2H6v3H4V4h5zm6 0h5v5h-2V6h-3V4zM6 15v3h3v2H4v-5h2zm12 0h2v5h-5v-2h3v-3z" /></svg>;
+        case 'close': return <svg {...c}><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>;
+        case 'sources': return <svg {...c}><path d="M12 3 2 9l10 6 10-6-10-6zm0 13.5L4.3 12 2 13.5 12 19l10-5.5L19.7 12 12 16.5z" /></svg>;
+        default: return null;
+    }
+}
+
 /** Player embutido (canais/jogos ao vivo): recebe a CADEIA de fontes daquela
  *  marca (várias regionais/qualidades) e faz failover automático — se uma falha,
  *  já tenta a próxima sozinho. Troca de fonte ao zapear, sem fechar. */
-function LivePlayer({ sources, title, options, onPick }: {
+function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
     sources: string[]; title: string;
     options?: { label: string; urls: string[] }[];   // fontes alternativas (p/ trocar em tela cheia)
     onPick?: (urls: string[]) => void;
+    onZap?: (dir: 1 | -1) => void;   // ↑/↓ em tela cheia trocam de canal/jogo SEM sair
+    prefetch?: string[];             // próximo canal (direção do zap) p/ pré-carregar → troca instantânea
 }) {
-    const ref = useRef<HTMLVideoElement>(null);
+    // JANELA DUPLA (A/B): uma toca (frente), a outra PRÉ-CARREGA o próximo canal. Ao
+    // zapear na direção pré-carregada, só promovemos a janela de trás → instantâneo.
+    const aRef = useRef<HTMLVideoElement>(null);
+    const bRef = useRef<HTMLVideoElement>(null);
     const boxRef = useRef<HTMLDivElement>(null);
-    const hlsRef = useRef<Hls | null>(null);
-    const idxRef = useRef(0);                 // fonte atual na cadeia
+    const frontRef = useRef(0);               // 0=A, 1=B é a janela visível/ativa
+    const hls0 = useRef<Hls | null>(null);
+    const hls1 = useRef<Hls | null>(null);
+    const idxRef = useRef(0);                  // fonte atual na cadeia (frente)
     const srcRef = useRef<string[]>(sources);
     const recoverRef = useRef(0);
-    const [alt, setAlt] = useState(0);        // fonte em uso (p/ aviso "tentando alternativa")
-    const [dead, setDead] = useState(false);  // todas as fontes falharam
-    const [loading, setLoading] = useState(false); // bufferizando (feedback ao zapear)
-    const [hasFrame, setHasFrame] = useState(false); // já pintou o 1º quadro? (cobre c/ preto até lá)
-    const [fs, setFs] = useState(false);      // tela cheia (CSS — funciona em qualquer TV)
-    const [showCtrl, setShowCtrl] = useState(true);  // barra de controles visível (auto-some)
+    const mutedRef = useRef(false);
+    const onZapRef = useRef(onZap); onZapRef.current = onZap;
+    const spinTimer = useRef<any>(null);
+    const preUrlRef = useRef<string | null>(null);   // url pré-carregada na janela de trás
+    const preCappedRef = useRef(false);              // prefetch já bufferizou o suficiente (parou de baixar)
+    const [front, setFront] = useState(0);    // espelha frontRef p/ a visibilidade no render
+    const [alt, setAlt] = useState(0);
+    const [dead, setDead] = useState(false);
+    const [hasFrame, setHasFrame] = useState(false);
+    const [fs, setFs] = useState(false);
+    const [showCtrl, setShowCtrl] = useState(true);
     const [paused, setPaused] = useState(false);
     const [muted, setMuted] = useState(false);
     const showRef = useRef(true);
     const hideTimer = useRef<any>(null);
-    const startTimer = useRef<any>(null);     // se a fonte não começar em ~9s, pula p/ a próxima
+    const startTimer = useRef<any>(null);
     const ctrlRef = useRef<HTMLDivElement>(null);
     srcRef.current = sources;
 
-    // Toca a fonte i. hls.js é uma instância PERSISTENTE: trocar de canal/fonte só faz
-    // loadSource (rápido), sem destruir/recriar — e recupera travadas sozinho.
+    const elAt = (i: number) => (i === 0 ? aRef.current : bRef.current);
+    const hlsAt = (i: number) => (i === 0 ? hls0.current : hls1.current);
+    const setHlsAt = (i: number, h: Hls | null) => { if (i === 0) hls0.current = h; else hls1.current = h; };
+    const vEl = () => elAt(frontRef.current);
+    // Buffer da janela da FRENTE. Antes era agressivo (liveSync 1 + buffer 10s) p/ baixa
+    // latência → no menor soluço de rede/CPU (típico na TV) ESVAZIAVA e travava. Agora
+    // ficamos uns segundos atrás do "ao vivo" e seguramos ~30s de colchão: muito mais
+    // liso, ao custo de ~poucos segundos de atraso (irrelevante p/ IPTV).
+    const MAINBUF = LOW_POWER ? 24 : 30;
+    const HLS_CFG: any = { enableWorker: true, lowLatencyMode: false, startFragPrefetch: true, startLevel: 0, abrEwmaDefaultEstimate: 800000, liveSyncDurationCount: 3, maxBufferLength: MAINBUF, maxMaxBufferLength: MAINBUF * 2, backBufferLength: 15, manifestLoadingTimeOut: 7000, fragLoadingTimeOut: 18000, manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6 };
+
+    // Toca a fonte i NA JANELA DA FRENTE (failover automático se a fonte falhar).
     const playAt = useCallback((i: number) => {
-        const v = ref.current; const url = srcRef.current[i];
+        const fi = frontRef.current; const v = elAt(fi); const url = srcRef.current[i];
         if (!v || !url) return;
-        idxRef.current = i; setAlt(i); setLoading(true);
+        idxRef.current = i; setAlt(i);
         const nextSrc = () => { const ni = idxRef.current + 1; if (ni < srcRef.current.length) { recoverRef.current = 0; playAt(ni); } else setDead(true); };
-        // Canal "pendurado" (carrega pra sempre, ex.: fonte morta): se em 9s não tiver
-        // começado a tocar, pula pra próxima fonte (ou marca como sem sinal).
         clearTimeout(startTimer.current);
-        startTimer.current = setTimeout(() => { const vv = ref.current; if (vv && vv.readyState < 3 && vv.currentTime < 0.1) nextSrc(); }, 9000);
+        startTimer.current = setTimeout(() => { if (v.readyState < 3 && v.currentTime < 0.1) nextSrc(); }, 9000);
         if (Hls.isSupported()) {
-            let hls = hlsRef.current;
+            let hls = hlsAt(fi);
             if (!hls) {
-                hls = new Hls({
-                    enableWorker: true, lowLatencyMode: false, startFragPrefetch: true,
-                    // ZAP RÁPIDO: começa na MENOR qualidade (1º quadro quase instantâneo) e
-                    // o ABR sobe a resolução depois; buffer inicial curto, perto da borda.
-                    startLevel: 0, abrEwmaDefaultEstimate: 800000,
-                    liveSyncDurationCount: 1, maxBufferLength: 10, maxMaxBufferLength: 40, backBufferLength: 10,
-                    manifestLoadingTimeOut: 7000, fragLoadingTimeOut: 18000,
-                    manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6,
-                });
+                hls = new Hls(HLS_CFG);
                 hls.attachMedia(v);
                 hls.on(Hls.Events.ERROR, (_e, d) => {
                     if (!d.fatal) return;
-                    const h = hlsRef.current; if (!h) return;
-                    // Recupera sem trocar de fonte (rede/mídia) algumas vezes.
-                    if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recoverRef.current < 4) { recoverRef.current++; try { h.startLoad(); } catch { } return; }
-                    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recoverRef.current < 4) { recoverRef.current++; try { h.recoverMediaError(); } catch { } return; }
-                    nextSrc(); // irrecuperável → próxima fonte
+                    if (hlsAt(frontRef.current) !== hls) return;   // erro de janela demovida → ignora
+                    if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.startLoad(); } catch { } return; }
+                    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.recoverMediaError(); } catch { } return; }
+                    nextSrc();
                 });
-                hlsRef.current = hls;
+                setHlsAt(fi, hls);
             }
             recoverRef.current = 0;
-            hls.loadSource(url);
-            v.play().catch(() => { });
+            try { hls.config.maxBufferLength = MAINBUF; } catch { }
+            hls.loadSource(url); try { hls.startLoad(); } catch { }
+            v.muted = mutedRef.current; v.play().catch(() => { });
         } else {
-            // Sem MSE (TVs antigas) → player nativo.
-            v.src = url;
-            v.onerror = nextSrc;
-            v.play().catch(() => { });
+            v.src = url; v.onerror = nextSrc; v.muted = mutedRef.current; v.play().catch(() => { });
         }
     }, []);
 
-    // Troca de canal/marca → recomeça da 1ª fonte (loadSource na MESMA instância).
-    // setHasFrame(false) já cobre tudo de PRETO até o 1º quadro real (mata o flash cinza).
-    useEffect(() => { setDead(false); setHasFrame(false); recoverRef.current = 0; playAt(0); }, [sources, playAt]);
+    // Pré-carrega `url` na janela de TRÁS, ECONÔMICO: menor qualidade + para de baixar
+    // após ~5s no buffer (stopLoad). Não dá play (poupa CPU/banda) — só paga o "engate"
+    // caro (conexão + 1º segmentos), que é o que custa os segundos de espera.
+    const prefetchInto = useCallback((url: string) => {
+        if (LOW_POWER) return;   // TV: 2ª janela trava o stream principal — sem prefetch (zap fica frio, mas LISO)
+        const bi = 1 - frontRef.current; const v = elAt(bi); if (!v) return;
+        const old = hlsAt(bi); if (old) { try { old.destroy(); } catch { } setHlsAt(bi, null); }
+        preCappedRef.current = false; preUrlRef.current = url;
+        if (!Hls.isSupported()) { preUrlRef.current = null; return; }
+        const hls = new Hls({ ...HLS_CFG, maxBufferLength: 6, maxMaxBufferLength: 6 });
+        // Para de baixar após ter ~2 segmentos no buffer (gasta o mínimo de banda).
+        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+            try { const b = v.buffered; if (b.length && !preCappedRef.current) { preCappedRef.current = true; hls.stopLoad(); } } catch { }
+        });
+        hls.on(Hls.Events.ERROR, (_e, d) => {
+            if (!d.fatal) return;
+            // prefetch falhou (ex.: limite de conexão) → descarta; o canal nunca será promovido vazio.
+            try { hls.destroy(); } catch { } if (hlsAt(bi) === hls) setHlsAt(bi, null); preUrlRef.current = null;
+        });
+        hls.attachMedia(v); v.muted = true; hls.loadSource(url); try { hls.startLoad(); } catch { }
+        setHlsAt(bi, hls);
+    }, []);
 
-    // Vigia de travadas: se está tocando mas o tempo não anda por ~3s, cutuca o hls.
+    // Promove a janela de trás (já pré-carregada) a frente → troca INSTANTÂNEA.
+    const promote = useCallback(() => {
+        const oldF = frontRef.current; const nf = 1 - oldF;
+        const nv = elAt(nf); const nhls = hlsAt(nf);
+        if (!nv || !nhls) return false;
+        // SÓ promove se o prefetch já tem quadro pronto; senão devolve false → cold-load
+        // normal (zap rápido, antes do prefetch terminar, não trava numa janela vazia).
+        const ready = nv.readyState >= 2 || (nv.buffered && nv.buffered.length > 0);
+        if (!ready) return false;
+        const ohls = hlsAt(oldF); if (ohls) { try { ohls.destroy(); } catch { } setHlsAt(oldF, null); }   // libera a conexão do canal anterior
+        frontRef.current = nf; setFront(nf);
+        preUrlRef.current = null; preCappedRef.current = false;
+        idxRef.current = 0; recoverRef.current = 0;
+        clearTimeout(spinTimer.current); setDead(false); setHasFrame(true);   // já tem quadro → sem spinner
+        try { nhls.config.maxBufferLength = MAINBUF; nhls.startLoad(); } catch { }   // volta ao buffer normal
+        nv.muted = mutedRef.current; nv.play().catch(() => { });
+        return true;
+    }, []);
+
+    // Troca de canal: se o novo canal É o que pré-carregamos → promove (instantâneo);
+    // senão, cold-load na janela da frente (sem flash: mantém o quadro até 450ms).
     useEffect(() => {
-        const v = ref.current; if (!v) return;
+        if (sources.length && preUrlRef.current && sources[0] === preUrlRef.current && promote()) return;
+        setDead(false); recoverRef.current = 0;
+        clearTimeout(spinTimer.current);
+        spinTimer.current = setTimeout(() => setHasFrame(false), 450);
+        playAt(0);
+        return () => clearTimeout(spinTimer.current);
+    }, [sources, playAt, promote]);
+
+    // Pré-carrega o vizinho quando o pai manda (só depois de assentar no canal — ver pai).
+    useEffect(() => {
+        const url = prefetch && prefetch[0];
+        const bi = 1 - frontRef.current;
+        if (!url || url === srcRef.current[0]) {
+            const old = hlsAt(bi); if (old) { try { old.destroy(); } catch { } setHlsAt(bi, null); }
+            preUrlRef.current = null; return;
+        }
+        if (url === preUrlRef.current) return;   // já pré-carregado
+        prefetchInto(url);
+    }, [prefetch, prefetchInto]);
+
+    // Vigia de travadas (na janela da frente).
+    useEffect(() => {
         let last = -1, stuck = 0;
         const iv = setInterval(() => {
-            if (v.paused || v.readyState < 2) return;
-            if (v.currentTime === last) { if (++stuck >= 3) { stuck = 0; try { hlsRef.current?.startLoad(); } catch { } v.play().catch(() => { }); } }
+            const v = vEl(); if (!v || v.paused || v.readyState < 2) return;
+            if (v.currentTime === last) { if (++stuck >= 3) { stuck = 0; try { hlsAt(frontRef.current)?.startLoad(); } catch { } v.play().catch(() => { }); } }
             else { stuck = 0; last = v.currentTime; }
         }, 1000);
         return () => clearInterval(iv);
     }, []);
 
-    // Feedback de "carregando": some quando o vídeo realmente começa.
+    // Status da FRENTE (ignora eventos da janela de trás). Aqui mora a TRAVA DE BANDA:
+    // se a frente rebufferiza (waiting) → PAUSA o prefetch (cede banda); quando volta a
+    // tocar (playing) → libera o prefetch a continuar (até o teto de ~5s).
     useEffect(() => {
-        const v = ref.current; if (!v) return;
-        const done = () => { clearTimeout(startTimer.current); setLoading(false); setHasFrame(true); };
-        const wait = () => setLoading(true);
-        v.addEventListener('playing', done); v.addEventListener('canplay', done);
-        v.addEventListener('waiting', wait);
-        return () => { v.removeEventListener('playing', done); v.removeEventListener('canplay', done); v.removeEventListener('waiting', wait); };
+        const done = (e: Event) => {
+            if (e.target !== vEl()) return;
+            clearTimeout(startTimer.current); clearTimeout(spinTimer.current); setHasFrame(true);
+            if (preUrlRef.current && !preCappedRef.current) { try { hlsAt(1 - frontRef.current)?.startLoad(); } catch { } }
+        };
+        const wait = (e: Event) => { if (e.target !== vEl()) return; try { hlsAt(1 - frontRef.current)?.stopLoad(); } catch { } };
+        const sync = (e: Event) => { if (e.target !== vEl()) return; const v = vEl(); if (v) { setPaused(v.paused); setMuted(v.muted); mutedRef.current = v.muted; } };
+        const list = [aRef.current, bRef.current].filter(Boolean) as HTMLVideoElement[];
+        for (const el of list) { el.addEventListener('playing', done); el.addEventListener('canplay', done); el.addEventListener('waiting', wait); el.addEventListener('play', sync); el.addEventListener('pause', sync); el.addEventListener('volumechange', sync); }
+        return () => { for (const el of list) { el.removeEventListener('playing', done); el.removeEventListener('canplay', done); el.removeEventListener('waiting', wait); el.removeEventListener('play', sync); el.removeEventListener('pause', sync); el.removeEventListener('volumechange', sync); } };
     }, []);
 
-    // Destrói a instância ao desmontar.
-    useEffect(() => () => { clearTimeout(startTimer.current); try { hlsRef.current?.destroy(); } catch { } hlsRef.current = null; }, []);
+    // Destrói as instâncias ao desmontar.
+    useEffect(() => () => { clearTimeout(startTimer.current); for (const h of [hls0.current, hls1.current]) { try { h?.destroy(); } catch { } } hls0.current = null; hls1.current = null; }, []);
     // ---- Controlador da barra de tela cheia (some sozinha, reaparece em qualquer ação) ----
     const setShow = useCallback((v: boolean) => { showRef.current = v; setShowCtrl(v); }, []);
     const reveal = useCallback(() => {
@@ -1202,24 +1460,23 @@ function LivePlayer({ sources, title, options, onPick }: {
     const ctrlButtons = () => Array.from(ctrlRef.current?.querySelectorAll<HTMLElement>('button') || []);
     const focusCtrl = (idx = 0) => { const b = ctrlButtons(); (b[Math.max(0, Math.min(b.length - 1, idx))])?.focus(); };
     const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
-    const togglePlay = () => { const v = ref.current; if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
-    const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
+    const togglePlay = () => { const v = vEl(); if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
+    const toggleMute = () => { const v = vEl(); if (!v) return; v.muted = !v.muted; mutedRef.current = v.muted; reveal(); };
     useBackHandler(fs, () => setFs(false));   // Voltar do controle sai da tela cheia (não do app)
-
-    // Mantém os ícones de play/mudo sincronizados com o vídeo.
-    useEffect(() => {
-        const v = ref.current; if (!v) return;
-        const sync = () => { setPaused(v.paused); setMuted(v.muted); };
-        v.addEventListener('play', sync); v.addEventListener('pause', sync); v.addEventListener('volumechange', sync);
-        return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', sync); };
-    }, []);
+    // (play/mudo já sincronizam pelos listeners das duas janelas — ver efeito de status acima.)
 
     // Em tela cheia: barra some/reaparece; ←→ navega entre os botões; Voltar sai;
     // tudo confinado à barra (não vaza pra lista atrás). Fora dela, foco volta ao player.
     useEffect(() => {
         if (!fs) {
             setShow(true); clearTimeout(hideTimer.current);
-            const t = setTimeout(() => boxRef.current?.focus(), 60);
+            const t = setTimeout(() => {
+                // NÃO roubar o foco da LISTA/stage: ao entrar nos Canais (ou ao clicar/zapear
+                // um canal) o foco deve ficar na lista (modo zapping), não pular pro player.
+                const ae = document.activeElement as HTMLElement | null;
+                if (ae && (ae.classList.contains('chan-live') || ae.closest('.chan-list'))) return;
+                boxRef.current?.focus();
+            }, 60);
             return () => clearTimeout(t);
         }
         reveal();
@@ -1232,6 +1489,10 @@ function LivePlayer({ sources, title, options, onPick }: {
                 return;
             }
             e.stopPropagation();  // confina: stageNav/spatialMove não agem na lista de trás
+            // ↑/↓ zapeiam canal/jogo SEM sair da tela cheia (mesmo com a barra escondida).
+            if (onZapRef.current && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault(); reveal(); onZapRef.current(e.key === 'ArrowDown' ? 1 : -1); return;
+            }
             if (!showRef.current) { e.preventDefault(); reveal(); focusCtrl(0); return; }  // 1ª tecla só revela
             reveal();
             if (e.key === 'ArrowRight') { e.preventDefault(); moveCtrl(1); }
@@ -1259,7 +1520,9 @@ function LivePlayer({ sources, title, options, onPick }: {
             aria-label="Player — OK para tela cheia"
             onKeyDown={onBoxKey}
             onClick={() => { if (fs) reveal(); else if (canFs) setFs(true); }}>
-            <video ref={ref} autoPlay playsInline className="live-video" />
+            {/* JANELA DUPLA: A e B empilhadas; a de trás (.lv-back) fica oculta pré-carregando. */}
+            <video ref={aRef} playsInline className={`live-video${front === 0 ? '' : ' lv-back'}`} />
+            <video ref={bRef} playsInline className={`live-video${front === 1 ? '' : ' lv-back'}`} />
             {/* Anel de foco SOBRE o vídeo (box-shadow no container fica escondido atrás dele). */}
             {!fs && <div className="live-ring" aria-hidden="true" />}
             {/* Dica visível só quando o player está focado (não é focável → não rouba D-pad). */}
@@ -1270,15 +1533,24 @@ function LivePlayer({ sources, title, options, onPick }: {
             {dead && sources.length > 0 && (<div className="player-err">Nenhuma fonte respondeu.<button onClick={() => window.open(sources[sources.length - 1], '_blank')}>Abrir externo</button></div>)}
             {fs && (
                 <div className={`live-ov${showCtrl ? '' : ' hidden'}`}>
-                    <div className="live-ov-top"><span className="live-ov-title">{title}</span></div>
-                    <div className="live-ctrl" ref={ctrlRef}>
-                        <button className="live-cbtn" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}>{paused ? '▶' : '❚❚'}</button>
-                        <button className="live-cbtn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}>{muted ? '🔇' : '🔊'}</button>
-                        {options && options.length > 1 && options.map((o, k) => (
-                            <button key={k} className={`now-opt${o.urls[0] === active ? ' on' : ''}`}
-                                onClick={() => { onPick?.(o.urls); reveal(); }}>{o.label}</button>
-                        ))}
-                        <button className="live-cbtn live-cbtn-exit" onClick={() => setFs(false)} aria-label="Sair da tela cheia">✕ Sair</button>
+                    <div className="live-ov-top">
+                        <span className="rp-live-pill"><i className="rp-live-dot" />AO VIVO</span>
+                        <span className="live-ov-title">{title}</span>
+                    </div>
+                    {paused && <button className="rp-center" tabIndex={-1} onClick={togglePlay} aria-label="Tocar"><RIcon n="play" /></button>}
+                    <div className="rp-ctrl" ref={ctrlRef}>
+                        <button className="rp-btn rp-primary" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}><RIcon n={paused ? 'play' : 'pause'} /></button>
+                        <button className="rp-btn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}><RIcon n={muted ? 'mute' : 'vol'} /></button>
+                        {options && options.length > 1 && (
+                            <div className="rp-sources">
+                                <span className="rp-sources-ico" aria-hidden="true"><RIcon n="sources" /></span>
+                                {options.map((o, k) => (
+                                    <button key={k} className={`now-opt${o.urls[0] === active ? ' on' : ''}`}
+                                        onClick={() => { onPick?.(o.urls); reveal(); }}>{o.label}</button>
+                                ))}
+                            </div>
+                        )}
+                        <button className="rp-btn rp-exit" onClick={() => setFs(false)} aria-label="Sair da tela cheia" title="Sair"><RIcon n="fsExit" /></button>
                     </div>
                 </div>
             )}
@@ -1302,6 +1574,16 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const [cur, setCur] = useState(0);
     const [dur, setDur] = useState(0);
     const [showCtrl, setShowCtrl] = useState(true);
+    const [scrub, setScrub] = useState<number | null>(null);   // posição da prévia (scrubbing)
+    const [thumbReady, setThumbReady] = useState(false);       // 1º frame da miniatura já desenhado
+    const barRef = useRef<HTMLDivElement>(null);
+    const previewRef = useRef<HTMLCanvasElement>(null);
+    const thumbRef = useRef<Thumbnailer | null>(null);
+    const zoneRef = useRef<'bar' | 'btn'>('bar');   // foco: barra de tempo x botões
+    const scrubRef = useRef<number | null>(null);
+    const accelRef = useRef(0);
+    const capTimer = useRef<any>(null);
+    const commitTimer = useRef<any>(null);
     useBackHandler(true, onClose);   // Voltar do controle fecha o player
 
     useEffect(() => {
@@ -1343,27 +1625,82 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
     const seek = (delta: number) => { const v = ref.current; if (!v) return; try { v.currentTime = Math.max(0, Math.min((v.duration || 1e9), v.currentTime + delta)); } catch { } reveal(); };
 
-    // Navegação por controle remoto (D-pad): some/reaparece; ←→ entre botões ou seek;
-    // OK toca/pausa; Voltar fecha. Tudo confinado (não vaza pra lista atrás).
+    // === Scrubbing com miniatura (estilo Netflix) ===
+    const ensureThumb = () => { if (!thumbRef.current) thumbRef.current = createThumbnailer(url, () => setThumbReady(true)); return thumbRef.current; };
+    const captureSoon = (t: number) => {
+        clearTimeout(capTimer.current);
+        capTimer.current = setTimeout(() => { const c = previewRef.current; if (c) ensureThumb().capture(t, c); }, 80);
+    };
+    // Libera o gerador de miniaturas (e a 2ª conexão com o provedor) — contas que só
+    // permitem 1 conexão NÃO têm a reprodução derrubada: o vídeo oculto só existe
+    // durante o scrub e é destruído ao confirmar/cancelar.
+    const killThumb = useCallback(() => { clearTimeout(capTimer.current); try { thumbRef.current?.destroy(); } catch { /* noop */ } thumbRef.current = null; setThumbReady(false); }, []);
+    // Aplica a posição escolhida no vídeo e volta a tocar (ao "parar" de segurar).
+    const commitScrub = useCallback(() => {
+        const t = scrubRef.current; const v = ref.current;
+        if (t != null && v) { try { v.currentTime = t; } catch { /* noop */ } v.play().catch(() => { }); }
+        scrubRef.current = null; setScrub(null); accelRef.current = 0;
+        clearTimeout(commitTimer.current); killThumb();
+    }, [killThumb]);
+    const cancelScrub = useCallback(() => { scrubRef.current = null; setScrub(null); accelRef.current = 0; clearTimeout(commitTimer.current); killThumb(); }, [killThumb]);
+    const scrubTo = useCallback((t: number, D: number, arm = true) => {
+        const cl = Math.max(0, Math.min(D, t));
+        scrubRef.current = cl; setScrub(cl); reveal(); captureSoon(cl);
+        clearTimeout(commitTimer.current);
+        // D-pad: OK confirma na hora; este é só a rede de segurança se a pessoa parar
+        // (tempo folgado pro frame da miniatura decodificar). Mouse (arm=false): só prévia.
+        if (arm) commitTimer.current = setTimeout(commitScrub, 2500);
+    }, [reveal, commitScrub]);
+    // Passo acelera enquanto segura (cada repetição anda mais), proporcional à duração.
+    const stepScrub = (dir: 1 | -1) => {
+        const v = ref.current; if (!v) return; const D = v.duration || 0;
+        if (!D || !isFinite(D)) return;
+        accelRef.current = Math.min(accelRef.current + 1, 40);
+        const base = Math.max(5, D / 240);
+        const from = scrubRef.current == null ? v.currentTime : scrubRef.current;
+        scrubTo(from + base * (1 + accelRef.current * 0.4) * dir, D);
+    };
+    useEffect(() => () => { clearTimeout(capTimer.current); clearTimeout(commitTimer.current); killThumb(); }, [killThumb]);
+
+    // Navegação por controle remoto (D-pad). Duas zonas:
+    //  - BARRA (padrão): ←→ scrub com miniatura; ↓ vai pros botões; OK confirma a posição.
+    //  - BOTÕES: ←→ entre botões; ↑ volta pra barra; OK dispara o botão.
+    // Voltar fecha. Tudo confinado (não vaza pra lista atrás).
     useEffect(() => {
-        reveal();
-        const t = setTimeout(() => focusCtrl(0), 60);
+        reveal(); zoneRef.current = 'bar';
+        const t = setTimeout(() => barRef.current?.focus(), 60);
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape' || e.key === 'Backspace') return; // useBackHandler trata
+            const k = e.key;
+            const isEnter = k === 'Enter' || k === ' ' || k === 'NumpadEnter';
+            // Enter na zona BOTÕES dispara o <button> focado nativamente — não intercepta.
+            if (isEnter && zoneRef.current === 'btn') { reveal(); return; }
             e.stopPropagation();
-            if (!showRef.current) { e.preventDefault(); reveal(); focusCtrl(0); return; }  // 1ª tecla só revela
+            if (!showRef.current) { e.preventDefault(); reveal(); zoneRef.current = 'bar'; barRef.current?.focus(); return; }
             reveal();
-            if (e.key === 'ArrowRight') { e.preventDefault(); moveCtrl(1); }
-            else if (e.key === 'ArrowLeft') { e.preventDefault(); moveCtrl(-1); }
-            else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); }
+            if (zoneRef.current === 'bar') {
+                if (k === 'ArrowRight') { e.preventDefault(); stepScrub(1); }
+                else if (k === 'ArrowLeft') { e.preventDefault(); stepScrub(-1); }
+                else if (k === 'ArrowDown') { e.preventDefault(); cancelScrub(); zoneRef.current = 'btn'; focusCtrl(0); }
+                else if (k === 'ArrowUp') { e.preventDefault(); }
+                else if (isEnter) { e.preventDefault(); if (scrubRef.current != null) commitScrub(); else togglePlay(); }
+            } else {
+                if (k === 'ArrowRight') { e.preventDefault(); moveCtrl(1); }
+                else if (k === 'ArrowLeft') { e.preventDefault(); moveCtrl(-1); }
+                else if (k === 'ArrowUp') { e.preventDefault(); zoneRef.current = 'bar'; barRef.current?.focus(); }
+                else if (k === 'ArrowDown') { e.preventDefault(); }
+            }
         };
+        const onUp = (e: KeyboardEvent) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') accelRef.current = 0; };
         const onMove = () => reveal();
         window.addEventListener('keydown', onKey, true);
+        window.addEventListener('keyup', onUp, true);
         window.addEventListener('mousemove', onMove, true);
-        return () => { clearTimeout(t); clearTimeout(hideTimer.current); window.removeEventListener('keydown', onKey, true); window.removeEventListener('mousemove', onMove, true); };
-    }, [reveal]);
+        return () => { clearTimeout(t); clearTimeout(hideTimer.current); window.removeEventListener('keydown', onKey, true); window.removeEventListener('keyup', onUp, true); window.removeEventListener('mousemove', onMove, true); };
+    }, [reveal, commitScrub, scrubTo]);
 
     const pct = dur > 0 ? (cur / dur) * 100 : 0;
+    const dispPct = scrub != null && dur > 0 ? (scrub / dur) * 100 : pct;   // barra/knob seguem a prévia ao scrubar
     return (
         <div ref={boxRef}
             className={`player${showCtrl ? '' : ' nocursor'}`}
@@ -1379,17 +1716,35 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
             )}
             <div className={`live-ov${showCtrl ? '' : ' hidden'}`}>
                 <div className="live-ov-top"><span className="live-ov-title">{title}</span></div>
+                {paused && <button className="rp-center" tabIndex={-1} onClick={togglePlay} aria-label="Tocar"><RIcon n="play" /></button>}
                 <div className="player-seek">
-                    <span className="player-time">{fmtTime(cur)}</span>
-                    <div className="player-bar-track"><i style={{ width: pct + '%' }} /></div>
+                    <span className="player-time">{fmtTime(scrub != null ? scrub : cur)}</span>
+                    <div ref={barRef} className={`player-bar-wrap${scrub != null ? ' scrubbing' : ''}`} tabIndex={0}
+                        onMouseMove={(e) => { const v = ref.current; if (!v || !dur) return; const r = e.currentTarget.getBoundingClientRect(); scrubTo(((e.clientX - r.left) / r.width) * dur, dur, false); }}
+                        onMouseLeave={() => cancelScrub()}
+                        onClick={(e) => { const v = ref.current; if (!v || !dur) return; const r = e.currentTarget.getBoundingClientRect(); v.currentTime = Math.max(0, Math.min(dur, ((e.clientX - r.left) / r.width) * dur)); cancelScrub(); reveal(); }}>
+                        {scrub != null && (
+                            <div className="player-preview" style={{ left: dispPct + '%' }}>
+                                <div className="player-preview-frame">
+                                    <canvas ref={previewRef} className="player-preview-img" width={256} height={144} />
+                                    {!thumbReady && <span className="player-preview-spin" />}
+                                </div>
+                                <span className="player-preview-time">{fmtTime(scrub)}</span>
+                            </div>
+                        )}
+                        <div className="player-bar-track">
+                            <i style={{ width: dispPct + '%' }} />
+                            <span className="player-knob" style={{ left: dispPct + '%' }} />
+                        </div>
+                    </div>
                     <span className="player-time">{fmtTime(dur)}</span>
                 </div>
-                <div className="live-ctrl" ref={ctrlRef}>
-                    <button className="live-cbtn" onClick={() => seek(-10)} aria-label="Voltar 10s" title="−10s">⏪</button>
-                    <button className="live-cbtn" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}>{paused ? '▶' : '❚❚'}</button>
-                    <button className="live-cbtn" onClick={() => seek(30)} aria-label="Avançar 30s" title="+30s">⏩</button>
-                    <button className="live-cbtn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}>{muted ? '🔇' : '🔊'}</button>
-                    <button className="live-cbtn live-cbtn-exit" onClick={onClose} aria-label="Fechar">✕ Sair</button>
+                <div className="rp-ctrl" ref={ctrlRef}>
+                    <button className="rp-btn rp-seek" onClick={() => seek(-10)} aria-label="Voltar 10s" title="−10s"><RIcon n="back" /><small>10</small></button>
+                    <button className="rp-btn rp-primary" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}><RIcon n={paused ? 'play' : 'pause'} /></button>
+                    <button className="rp-btn rp-seek" onClick={() => seek(30)} aria-label="Avançar 30s" title="+30s"><RIcon n="fwd" /><small>30</small></button>
+                    <button className="rp-btn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}><RIcon n={muted ? 'mute' : 'vol'} /></button>
+                    <button className="rp-btn rp-exit" onClick={onClose} aria-label="Fechar" title="Fechar"><RIcon n="close" /></button>
                 </div>
             </div>
         </div>
@@ -1428,11 +1783,11 @@ function ratingNum(m: any): number { const r = parseFloat(m?.imdbRating); return
 
 // --- Progresso de reprodução (continuar assistindo / retomar posição) ----------
 // Chave = id do conteúdo (filme `vod..._` ou episódio `epi..._`).
-const PROG_KEY = 'rajada.progress.v1';
+const PROG_KEY = 'proza.progress.v1';
 function loadProg(): Record<string, { pos: number; dur: number; t: number }> { try { return JSON.parse(localStorage.getItem(PROG_KEY) || '{}'); } catch { return {}; } }
 function getProg(key: string) { if (!key) return null; return loadProg()[key] || null; }
 // Episódios/filmes concluídos (>95%) — usado p/ achar o "próximo episódio".
-const WATCHED_KEY = 'rajada.watched.v1';
+const WATCHED_KEY = 'proza.watched.v1';
 function loadWatched(): Record<string, number> { try { return JSON.parse(localStorage.getItem(WATCHED_KEY) || '{}'); } catch { return {}; } }
 function markWatched(key: string) { if (!key) return; try { const w = loadWatched(); w[key] = Date.now(); localStorage.setItem(WATCHED_KEY, JSON.stringify(w)); } catch { } }
 function saveProg(key: string, pos: number, dur: number) {
@@ -1476,7 +1831,7 @@ function parseEpgDesc(desc: string): { now: string; next: string } {
 }
 
 // --- Favoritos / Minha lista (filmes, séries, canais) -------------------------
-const FAV_KEY = 'rajada.fav.v1';
+const FAV_KEY = 'proza.fav.v1';
 function loadFav(): Record<string, any> { try { return JSON.parse(localStorage.getItem(FAV_KEY) || '{}'); } catch { return {}; } }
 function isFav(id: string): boolean { return !!loadFav()[id]; }
 function toggleFav(meta: any): boolean {
@@ -1551,7 +1906,7 @@ function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel,
     const total = res.movies.length + res.series.length + res.channels.length + gameHits.length;
     const Sec = (key: string, title: string, metas: any[], onItem: (m: any) => void) => metas.length > 0 && (
         <section className="row" key={key}><h2>{title} <span className="vod-cat-count">{metas.length}</span></h2>
-            <div className="tiles">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onItem(m)} />)}</div>
+            <div className="tiles">{metas.map((m: any) => <Tile key={m.id} meta={m} onOpen={onItem} />)}</div>
         </section>
     );
     // Ordem das linhas conforme a seção em que a busca foi aberta (a relevante primeiro).
@@ -1735,30 +2090,83 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     const timer = useRef<any>(null);
     const interacted = useRef(false);
     const [spin, setSpin] = useState(0); // índice da auto-rotação (billboard ocioso)
-    const initCat = useRef<any>((() => { try { return JSON.parse(localStorage.getItem('rajada.vodcat.v1') || '{}'); } catch { return {}; } })());
+    const initCat = useRef<any>((() => { try { return JSON.parse(localStorage.getItem('proza.vodcat.v1') || '{}'); } catch { return {}; } })());
     const [mainCat, setMainCat] = useState<string>(initCat.current.main || '__all'); // categoria principal
     const [subCat, setSubCat] = useState<string>(initCat.current.sub || '__all');    // subcategoria (id do catálogo)
-    const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // buscadas sob demanda
+    const [loaded, setLoaded] = useState<Record<string, any[]>>({}); // páginas já buscadas, acumuladas
+    const [more, setMore] = useState<Record<string, boolean>>({});   // ainda há páginas a buscar?
+    const fetchingRef = useRef(false);                               // evita buscar a mesma página 2x
+    const [rowCap, setRowCap] = useState<Record<string, number>>({}); // qtos cards revelar por fileira da home (cresce ao navegar →)
+    const fetchingRowRef = useRef<Record<string, boolean>>({});       // evita refetch simultâneo por fileira
     const [loadingCat, setLoadingCat] = useState(false);
+    const [gridLimit, setGridLimit] = useState(GRID_PAGE);  // paginação do grid (anti-lag na TV)
     const [scrolled, setScrolled] = useState(false);   // board saiu da tela → mostra preview flutuante
     const vodRef = useRef<HTMLDivElement>(null);        // scroller (p/ revelar o board ao subir)
 
-    // ↑ estando na 1ª fileira (ou na barra de categorias) → rola TUDO pro topo e foca o
-    // botão Assistir, fazendo o board grande reaparecer COMPLETO (bug: ficava cortado).
+    // Navegação VERTICAL explícita (↑/↓) entre as faixas do VOD. NÃO usa a geometria
+    // global (spatialMove) porque a barra de categorias é STICKY no topo: ao centralizar
+    // um card, a fileira de cima saía da tela e o ↑ "pulava" pra catbar — voltando pro
+    // início (era exatamente o bug relatado). Aqui montamos as faixas em ordem
+    // (board → categorias → subcategorias → cada fileira / linha do grid → "carregar
+    // mais") e pulamos pra faixa vizinha preservando a COLUNA (card alinhado na
+    // horizontal). ←/→ continuam na geometria global (dentro da fileira).
     const onVodKey = useCallback((e: React.KeyboardEvent) => {
-        if (e.key !== 'ArrowUp') return;
+        if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
         const sc = vodRef.current; if (!sc) return;
-        const a = document.activeElement as HTMLElement | null; if (!a) return;
-        const firstSec = sc.querySelector('.vod-rows section, .vod-rows .vod-cat-sec');
-        const sec = a.closest('section, .vod-cat-sec');
-        if (a.closest('.vod-catbar') || (sec && sec === firstSec)) {
-            e.preventDefault(); e.stopPropagation();
-            sc.scrollTo({ top: 0, behavior: 'smooth' });
-            setTimeout(() => (sc.querySelector('.vod-board .vb-play') as HTMLElement | null)?.focus(), 60);
+        const a = document.activeElement as HTMLElement | null; if (!a || !sc.contains(a)) return;
+        const groups: HTMLElement[][] = [];
+        const play = sc.querySelector<HTMLElement>('.vod-board .vb-play'); if (play) groups.push([play]);
+        const cats = [...sc.querySelectorAll<HTMLElement>('.vod-cats .vod-cat')]; if (cats.length) groups.push(cats);
+        const subs = [...sc.querySelectorAll<HTMLElement>('.vod-subcats .vod-sub')]; if (subs.length) groups.push(subs);
+        for (const s of sc.querySelectorAll('.vod-rows section.row')) {
+            const t = [...s.querySelectorAll<HTMLElement>('.tile')]; if (t.length) groups.push(t);
+        }
+        const grid = sc.querySelector('.vod-grid');
+        if (grid) {
+            const byTop = new Map<number, HTMLElement[]>();
+            for (const t of grid.querySelectorAll<HTMLElement>('.tile')) {
+                const k = t.offsetTop; let arr = byTop.get(k); if (!arr) { arr = []; byTop.set(k, arr); } arr.push(t);
+            }
+            [...byTop.keys()].sort((x, y) => x - y).forEach(k => groups.push(byTop.get(k)!));
+            const more = sc.querySelector<HTMLElement>('.vod-more'); if (more) groups.push([more]);
+        }
+        const gi = groups.findIndex(g => g.includes(a));
+        if (gi < 0) return;   // foco fora das faixas → deixa a geometria global agir
+        e.preventDefault(); e.stopPropagation();
+        const ni = gi + (e.key === 'ArrowDown' ? 1 : -1);
+        if (ni < 0) { focusTopbar(); return; }     // acima do board → abas do topo
+        if (ni >= groups.length) return;            // abaixo da última faixa → permanece
+        const target = groups[ni];
+        const c = a.getBoundingClientRect(); const cx = (c.left + c.right) / 2;
+        let best = target[0], bd = Infinity;
+        for (const el of target) { const r = el.getBoundingClientRect(); const d = Math.abs((r.left + r.right) / 2 - cx); if (d < bd) { bd = d; best = el; } }
+        best.focus({ preventScroll: true });   // nós controlamos o scroll (sem pulo duplo)
+        // Enquadramento: o scroll SEMPRE para numa posição boa, mostrando a seção em foco.
+        // 1) Topo (board): rola tudo pro topo → banner inteiro à mostra.
+        if (ni === 0) { sc.scrollTo({ top: 0, behavior: 'auto' }); return; }
+        const bar = sc.querySelector<HTMLElement>('.vod-catbar');
+        const barH = bar ? bar.getBoundingClientRect().height : 0;
+        const viewTop = sc.getBoundingClientRect().top;   // topo do scroller (abaixo da topbar)
+        const sec = best.closest('section.row') as HTMLElement | null;
+        if (sec) {
+            // 2) Fileira horizontal: encosta o TÍTULO da seção logo abaixo da barra fixa →
+            //    sempre enquadra "título da seção + a fila de cards" inteira.
+            const delta = sec.getBoundingClientRect().top - (viewTop + barH + 14);
+            sc.scrollBy({ top: delta, behavior: 'auto' });
+        } else if (best.classList.contains('tile')) {
+            // 3) Grid de categoria (sem títulos por linha): centraliza a linha em foco,
+            //    mas nunca deixa o card atrás da barra fixa.
+            best.scrollIntoView({ block: 'center', inline: 'nearest' });
+            const tr = best.getBoundingClientRect();
+            if (tr.top < viewTop + barH) sc.scrollBy({ top: tr.top - (viewTop + barH + 14), behavior: 'auto' });
+        } else {
+            // 4) Categorias/subcategorias (a própria barra fixa): garante visível.
+            best.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            if (bar) { const tr = best.getBoundingClientRect(); if (tr.top < viewTop + barH) sc.scrollBy({ top: tr.top - (viewTop + barH + 14), behavior: 'auto' }); }
         }
     }, []);
     // Categorias descobertas vazias (escondidas dos botões). Persiste entre sessões.
-    const [empty, setEmpty] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('rajada.vodempty.v1') || '[]')); } catch { return new Set(); } });
+    const [empty, setEmpty] = useState<Set<string>>(() => { try { return new Set(JSON.parse(localStorage.getItem('proza.vodempty.v1') || '[]')); } catch { return new Set(); } });
 
     // Árvore de categorias do catálogo. Nome "Filmes | Ação" vira principal
     // "Filmes" + sub "Ação"; sem "|" vira uma principal própria (com selfId).
@@ -1771,7 +2179,11 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
             const main = parts[0] || c.name; const sub = parts.slice(1).join(' | ');
             if (!map.has(main)) map.set(main, { name: main, type: c.type, subs: [] });
             const node = map.get(main)!;
-            if (sub) node.subs.push({ name: sub, id: c.id }); else node.selfId = c.id;
+            // selfId = catálogo "raiz" da categoria (Todos). NÃO sobrescreve: o base
+            // (ex.: nexotv_vod = TODOS os filmes) vem primeiro e deve vencer um grupo do
+            // provedor de mesmo nome (ex.: um grupo "Filmes" com 1 item) que sobrescrevia
+            // e fazia a categoria mostrar só aquele 1 item.
+            if (sub) node.subs.push({ name: sub, id: c.id }); else if (!node.selfId) node.selfId = c.id;
         }
         return [...map.values()];
     }, [engine]);
@@ -1793,33 +2205,94 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
 
     const metasOf = (id: string | null) => {
         if (!id) return [];
+        if (loaded[id]) return loaded[id];          // lista COMPLETA (todas as páginas)
         const r = [...movieRows, ...seriesRows].find(x => x.id === id);
-        return r ? r.metas : (loaded[id] || []);
+        return r ? r.metas : [];                      // 30 da home como preview enquanto a completa carrega
     };
 
     // Lembra a última categoria aberta.
-    useEffect(() => { try { localStorage.setItem('rajada.vodcat.v1', JSON.stringify({ main: mainCat, sub: subCat })); } catch { } }, [mainCat, subCat]);
+    useEffect(() => { try { localStorage.setItem('proza.vodcat.v1', JSON.stringify({ main: mainCat, sub: subCat })); } catch { } }, [mainCat, subCat]);
     // Se a categoria lembrada não existe mais no catálogo, volta pra "Tudo".
     useEffect(() => { if (mainCat !== '__all' && tree.length && !tree.find(n => n.name === mainCat)) { setMainCat('__all'); setSubCat('__all'); } }, [tree]);
 
-    // Busca o catálogo selecionado sob demanda; se vier vazio, marca como vazio (some dos botões).
+    // Catálogos podem ter MILHARES de itens (ex.: "Filmes" = ~30 mil). Paginar PREGUIÇOSO:
+    // busca a 1ª página ao abrir a categoria; busca a próxima conforme o usuário pede mais
+    // (gridLimit cresce). Carregar tudo de uma vez travaria a TV. O getCatalog devolve
+    // ~100/página via skip; `more[selId]` indica se ainda há páginas.
+    const VOD_PAGE = 100;
     useEffect(() => {
-        if (!selId) return;
-        const inRows = [...movieRows, ...seriesRows].some(r => r.id === selId);
-        if (inRows || loaded[selId]) return;
+        if (!selId || loaded[selId]) return;
         let dead = false; setLoadingCat(true);
-        engine.getCatalog({ type: node?.type || 'movie', id: selId })
+        engine.getCatalog({ type: node?.type || 'movie', id: selId, extra: { skip: '0' } })
             .then(({ metas }: any) => {
                 if (dead) return;
-                const list = metas || []; setLoaded(p => ({ ...p, [selId]: list }));
-                if (!list.length) setEmpty(prev => { const n = new Set(prev); n.add(selId); try { localStorage.setItem('rajada.vodempty.v1', JSON.stringify([...n])); } catch { } return n; });
+                const got = metas || [];
+                setLoaded(p => ({ ...p, [selId]: got }));
+                setMore(p => ({ ...p, [selId]: got.length >= VOD_PAGE }));
+                if (!got.length) setEmpty(prev => { const n = new Set(prev); n.add(selId); try { localStorage.setItem('proza.vodempty.v1', JSON.stringify([...n])); } catch { } return n; });
             })
-            .catch(() => { if (!dead) setLoaded(p => ({ ...p, [selId]: [] })); })
+            .catch(() => { if (!dead) { setLoaded(p => ({ ...p, [selId]: [] })); setMore(p => ({ ...p, [selId]: false })); } })
             .finally(() => { if (!dead) setLoadingCat(false); });
         return () => { dead = true; };
     }, [selId]);
 
+    // Conforme o grid revela mais (gridLimit) e chega perto do fim do já carregado, busca
+    // a próxima página e acumula — paginação "infinita" sem travar.
+    useEffect(() => {
+        if (!selId) return;
+        const have = loaded[selId];
+        if (!have || !more[selId] || fetchingRef.current) return;
+        if (gridLimit + 24 <= have.length) return;   // ainda há folga carregada
+        fetchingRef.current = true;
+        engine.getCatalog({ type: node?.type || 'movie', id: selId, extra: { skip: String(have.length) } })
+            .then(({ metas }: any) => {
+                const got = metas || [];
+                setLoaded(p => ({ ...p, [selId]: [...(p[selId] || []), ...got] }));
+                setMore(p => ({ ...p, [selId]: got.length >= VOD_PAGE }));
+            })
+            .catch(() => { setMore(p => ({ ...p, [selId]: false })); })
+            .finally(() => { fetchingRef.current = false; });
+    }, [gridLimit, selId, loaded, more]);
+
+    // "Carregar mais" do grid: cresce o limite e leva o FOCO pro 1º card novo. Sem isso o
+    // foco ficava no botão (que pulava pro fim de tudo). Re-tenta enquanto os cards novos
+    // ainda estão renderizando/sendo buscados.
+    const loadMoreGrid = useCallback(() => {
+        const firstNew = gridLimit;
+        setGridLimit(n => n + GRID_PAGE);
+        let tries = 0;
+        const focusNew = () => {
+            const grid = vodRef.current?.querySelector('.vod-grid');
+            const t = grid?.querySelectorAll<HTMLElement>('.tile')[firstNew];
+            if (t) { t.focus({ preventScroll: true }); t.scrollIntoView({ block: 'center', inline: 'nearest' }); }
+            else if (++tries < 24) setTimeout(focusNew, 80);
+        };
+        setTimeout(focusNew, 60);
+    }, [gridLimit]);
+
+    // Fileiras da home: ao navegar → perto do fim, revela mais cards e busca a próxima
+    // página do catálogo quando o já-carregado acaba (paginação POR FILEIRA na página
+    // principal de Filmes/Séries).
+    const growRow = useCallback((row: Row, idx: number, shownLen: number) => {
+        if (idx < shownLen - 4) return;                       // só perto do fim da fila
+        setRowCap(p => ({ ...p, [row.id]: (p[row.id] || ROW_CAP) + ROW_CAP }));
+        const base = loaded[row.id] || row.metas;
+        const nextCap = (rowCap[row.id] || ROW_CAP) + ROW_CAP;
+        if (nextCap + 6 <= base.length || more[row.id] === false || fetchingRowRef.current[row.id]) return;
+        fetchingRowRef.current[row.id] = true;
+        engine.getCatalog({ type: (row as any).type, id: row.id, extra: { skip: String(base.length) } })
+            .then(({ metas }: any) => {
+                const got = metas || [];
+                setLoaded(p => ({ ...p, [row.id]: [...(p[row.id] || row.metas), ...got] }));
+                setMore(p => ({ ...p, [row.id]: got.length >= VOD_PAGE }));
+            })
+            .catch(() => { setMore(p => ({ ...p, [row.id]: false })); })
+            .finally(() => { fetchingRowRef.current[row.id] = false; });
+    }, [engine, loaded, more, rowCap]);
+
     const pickMain = (name: string) => { setMainCat(name); setSubCat('__all'); };
+    // Toda troca de categoria/sub volta o grid pra 1ª página (não acumula milhares de cards).
+    useEffect(() => { setGridLimit(GRID_PAGE); }, [selId]);
 
     // Destaques: bem avaliados (nota desc), únicos. Semeia o board e a fileira.
     const featured = useMemo(() => {
@@ -1937,21 +2410,29 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                     <>
                         {rows.map(r => (
                             <section className="row" key={r.id}><h2>{r.name}</h2>
-                                <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
+                                <div className="tiles">{r.metas.map((m: any) => <Tile key={m.id} meta={m} onOpen={onOpen} onFocusItem={focus} progress={prog(m.id)} />)}</div>
                             </section>
                         ))}
                         {movieRows.length > 0 && <div className="sec-head">Filmes</div>}
-                        {movieRows.map(row => (
-                            <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
-                            </section>
-                        ))}
+                        {movieRows.map(row => {
+                            const base = loaded[row.id] || row.metas;
+                            const shown = base.slice(0, rowCap[row.id] || ROW_CAP);
+                            return (
+                                <section className="row" key={row.id}><h2>{row.name}</h2>
+                                    <div className="tiles">{shown.map((m: any, i: number) => <Tile key={m.id} meta={m} onOpen={onOpen} onFocusItem={(mm: any) => { focus(mm); growRow(row, i, shown.length); }} progress={prog(m.id)} />)}</div>
+                                </section>
+                            );
+                        })}
                         {seriesRows.length > 0 && <div className="sec-head">Séries</div>}
-                        {seriesRows.map(row => (
-                            <section className="row" key={row.id}><h2>{row.name}</h2>
-                                <div className="tiles">{row.metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
-                            </section>
-                        ))}
+                        {seriesRows.map(row => {
+                            const base = loaded[row.id] || row.metas;
+                            const shown = base.slice(0, rowCap[row.id] || ROW_CAP);
+                            return (
+                                <section className="row" key={row.id}><h2>{row.name}</h2>
+                                    <div className="tiles">{shown.map((m: any, i: number) => <Tile key={m.id} meta={m} onOpen={onOpen} onFocusItem={(mm: any) => { focus(mm); growRow(row, i, shown.length); }} progress={prog(m.id)} />)}</div>
+                                </section>
+                            );
+                        })}
                     </>
                 ) : (() => {
                     const metas = metasOf(selId);
@@ -1961,8 +2442,13 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
                     const name = subName ? `${mainCat} · ${subName}` : mainCat;
                     return (
                         <section className="vod-cat-sec">
-                            <h2 className="sec-head">{name} <span className="vod-cat-count">{metas.length}</span></h2>
-                            <div className="vod-grid">{metas.map((m: any) => <Tile key={m.id} meta={m} onPlay={() => onOpen(m)} onFocusItem={focus} progress={prog(m.id)} />)}</div>
+                            <h2 className="sec-head">{name} <span className="vod-cat-count">{metas.length}{more[selId!] ? '+' : ''}</span></h2>
+                            <div className="vod-grid">{metas.slice(0, gridLimit).map((m: any) => <Tile key={m.id} meta={m} onOpen={onOpen} onFocusItem={focus} progress={prog(m.id)} />)}</div>
+                            {(metas.length > gridLimit || more[selId!]) && (
+                                <button className="vod-more" onClick={loadMoreGrid}>
+                                    {metas.length > gridLimit ? `Carregar mais (${metas.length - gridLimit}${more[selId!] ? '+' : ''})` : 'Carregar mais…'}
+                                </button>
+                            )}
                         </section>
                     );
                 })()}
@@ -1971,7 +2457,11 @@ function VodView({ engine, movieRows, seriesRows, cwAll, onOpen }: {
     );
 }
 
-function Tile({ meta, onPlay, onFocusItem, progress }: { meta: any; onPlay: () => void; onFocusItem?: (m: any) => void; progress?: number }) {
+// React.memo: sem isto, mover o foco (setFocused no pai) re-renderizava TODOS os ~250
+// cards a cada tecla do controle → era a causa central do lag de navegação na TV. Com
+// props estáveis (meta imutável, onOpen/onFocusItem em useCallback, progress primitivo),
+// só o card que muda re-renderiza.
+const Tile = React.memo(function Tile({ meta, onOpen, onFocusItem, progress }: { meta: any; onOpen: (m: any) => void; onFocusItem?: (m: any) => void; progress?: number }) {
     const shape = shapeFor(meta);
     // Cascata de logos (banco → próprio → irmão → card). Se uma falhar, o onError
     // avança pra próxima sozinho — nunca fica vazio.
@@ -2007,7 +2497,7 @@ function Tile({ meta, onPlay, onFocusItem, progress }: { meta: any; onPlay: () =
         } catch { /* tainted (sem CORS) → mantém contain */ }
     };
     return (
-        <button className={`tile ${shape}${fill ? ' fill' : ''}`} onClick={onPlay} aria-label={meta.name}
+        <button className={`tile ${shape}${fill ? ' fill' : ''}`} onClick={() => onOpen(meta)} aria-label={meta.name}
             onFocus={onFocusItem ? () => onFocusItem(meta) : undefined}
             onMouseEnter={onFocusItem ? () => onFocusItem(meta) : undefined}>
             <img src={src} alt={meta.name} loading="lazy" crossOrigin={isProxyLogo ? 'anonymous' : undefined}
@@ -2018,6 +2508,6 @@ function Tile({ meta, onPlay, onFocusItem, progress }: { meta: any; onPlay: () =
             <span className="tile-name">{meta.name}</span>
         </button>
     );
-}
+});
 
 export default App;

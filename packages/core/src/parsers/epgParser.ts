@@ -97,6 +97,7 @@ export async function parseEPG(content: string, opts: ParseEpgOptions = {}) {
                     stop: stopDate.getTime(),
                     title: pickText(prog.title) || 'Unknown',
                     desc: pickText(prog.desc),
+                    category: pickText(prog.category),   // categoria XMLTV (liga/esporte) p/ classificar o campeonato
                 });
             }
 

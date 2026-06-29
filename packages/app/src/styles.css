@@ -34,7 +34,7 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .pc-sub2 { font-size: 14px; font-weight: 600; color: #d6d6db; text-shadow: 0 1px 8px rgba(0,0,0,.9); }
 .pc-live { position: absolute; top: 16px; left: 16px; background: #e50914; color: #fff; font-size: 12px; font-weight: 800; letter-spacing: 1.2px; padding: 5px 11px; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
 .pc-play { position: absolute; top: 44%; left: 50%; transform: translate(-50%,-50%) scale(.6); width: 74px; height: 74px; border-radius: 50%;
-    background: rgba(20,20,24,.55); backdrop-filter: blur(3px); border: 2.5px solid rgba(255,255,255,.85); color: #fff; font-size: 28px;
+    background: rgba(20,20,24,.82); border: 2.5px solid rgba(255,255,255,.85); color: #fff; font-size: 28px;
     display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity .2s, transform .2s; }
 .pick-card:hover .pc-play, .pick-card:focus .pc-play { opacity: 1; transform: translate(-50%,-50%) scale(1); }
 
@@ -49,6 +49,19 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .tabs-top button:hover, .tabs-top button:focus { background: #1c1c24; outline: none; }
 .tabs-top button.on { background: #e50914; color: #fff; }
 .logout { background: transparent; color: #aaa; border: 0; cursor: pointer; }
+
+/* Foco visível MESMO em itens já selecionados: o item selecionado fica vermelho/verde
+   (.on) e o estilo de foco (que também usa essas cores) sumia em cima dele. Um anel
+   BRANCO contrasta com qualquer cor de seleção, então o foco sempre aparece. */
+.tabs-top button.on:focus, .tabs button.on:focus,
+.vod-cat.on:focus, .vod-sub.on:focus, .vod-more.on:focus,
+.cat-card.on:focus, .cat-row.on:focus, .chan-row.on:focus,
+.now-opt.on:focus, .det-ep.on:focus, .opt.on:focus {
+    outline: 3px solid #fff !important;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px rgba(0,0,0,.45);
+    z-index: 4;
+}
 
 /* ---- Canais ao vivo (categorias) ---- */
 .chan-cats { padding: 20px 28px; }
@@ -92,6 +105,10 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .chan-virt .chan-ico { width: 36px; height: 36px; }
 .chan-row:hover { background: #1a1a22; }
 .chan-row.on { background: #e50914; color: #fff; }
+/* Cursor da lista: com a navegação (stage) em foco, a linha SELECIONADA (.on) ganha um
+   anel branco interno — fica óbvio qual canal está selecionado ao zapear. Some quando o
+   foco vai pro player (aí o .on vermelho continua indicando o canal no ar). */
+.chan-live:focus .chan-row.on { outline: 3px solid #fff; outline-offset: -3px; }
 .chan-ico { width: 38px; height: 38px; flex: 0 0 auto; object-fit: contain; background: #15151b; border-radius: 6px; }
 .chan-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* linha de jogo na lista lateral */
@@ -112,7 +129,9 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .chan-stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #000; }
 .live-player { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; background: #000; display: flex; align-items: center; justify-content: center; }
 /* cover: preenche toda a área (sem tarjas pretas). Corta levemente as bordas. */
-.live-video { width: 100%; height: 100%; background: #000; object-fit: cover; }
+.live-video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; object-fit: cover; z-index: 1; }
+/* Janela de trás (prefetch): oculta, atrás da frente — não pode capturar nada. */
+.lv-back { opacity: 0; pointer-events: none; z-index: 0; }
 .live-empty { position: absolute; color: #777; font-size: 18px; }
 /* O player inteiro é o alvo do foco: OK = tela cheia. Anel vermelho quando focado. */
 .live-player { cursor: pointer; }
@@ -134,18 +153,39 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
    embaixo. Some sozinha após 4s e reaparece a qualquer ação. */
 .live-ov { position: absolute; inset: 0; z-index: 7; pointer-events: none; opacity: 1; transition: opacity .25s; }
 .live-ov.hidden { opacity: 0; }
-.live-ov.hidden .live-ctrl { pointer-events: none; }
+.live-ov.hidden .rp-ctrl { pointer-events: none; }
 .live-player.nocursor { cursor: none; }
-.live-ov-top { position: absolute; left: 0; right: 0; top: 0; padding: 22px 26px; background: linear-gradient(180deg, rgba(0,0,0,.8), rgba(0,0,0,0)); }
-.live-ov-title { color: #fff; font-weight: 800; font-size: 22px; }
-.live-ctrl { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 18px 24px 22px; background: linear-gradient(0deg, rgba(0,0,0,.88), rgba(0,0,0,0)); pointer-events: auto; overflow-x: auto; scrollbar-width: none; }
-.live-ctrl::-webkit-scrollbar { display: none; }
-.live-cbtn { flex: 0 0 auto; background: rgba(28,28,36,.9); color: #fff; border: 1px solid #2a2a32; border-radius: 10px; min-width: 46px; height: 46px; padding: 0 14px; font-size: 17px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
-.live-cbtn:hover, .live-cbtn:focus { background: #e50914; border-color: #e50914; outline: none; transform: scale(1.06); }
-.live-cbtn-exit { margin-left: auto; }
-/* Os botões de fonte (now-opt) dentro da barra ganham realce de foco igual. */
-.live-ctrl .now-opt { height: 46px; }
-.live-ctrl .now-opt:focus { transform: scale(1.06); }
+.live-ov-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 14px; padding: 24px 28px; background: linear-gradient(180deg, rgba(0,0,0,.85), rgba(0,0,0,0)); }
+.live-ov-title { color: #fff; font-weight: 800; font-size: 24px; letter-spacing: .2px; text-shadow: 0 2px 12px rgba(0,0,0,.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Pill AO VIVO (player ao vivo) — ponto pulsante vermelho da marca. */
+.rp-live-pill { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px; background: #e50914; color: #fff; font-size: 13px; font-weight: 800; letter-spacing: 1px; padding: 5px 11px; border-radius: 6px; }
+.rp-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: rp-pulse 1.4s ease-in-out infinite; }
+@keyframes rp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+/* === Player Proza — controles "cinema" (ícones SVG, vermelho da marca) === */
+.rp-ctrl { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 16px 26px 26px; background: linear-gradient(0deg, rgba(0,0,0,.92) 0%, rgba(0,0,0,.55) 55%, rgba(0,0,0,0) 100%); pointer-events: auto; }
+.rp-btn { flex: 0 0 auto; position: relative; background: transparent; color: #fff; border: 0; border-radius: 50%; width: 50px; height: 50px; padding: 0; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background .12s, transform .12s, box-shadow .12s; }
+.rp-btn svg { width: 26px; height: 26px; }
+.rp-btn:hover { background: rgba(255,255,255,.16); transform: scale(1.08); outline: none; }
+.rp-btn:focus { background: #e50914; box-shadow: 0 0 0 3px rgba(229,9,20,.35); transform: scale(1.08); outline: none; }
+/* Play/Pause principal: maior e já em vermelho. */
+.rp-primary { width: 60px; height: 60px; background: #e50914; }
+.rp-primary svg { width: 30px; height: 30px; }
+.rp-primary:hover, .rp-primary:focus { background: #ff1f2b; box-shadow: 0 0 0 4px rgba(229,9,20,.45); }
+/* Avançar/retroceder com o número (10/30) sobreposto ao ícone. */
+.rp-seek small { position: absolute; bottom: 11px; font-size: 9px; font-weight: 800; letter-spacing: .3px; }
+.rp-exit { margin-left: auto; }
+/* Trilho de fontes (ao vivo) embutido na barra de controles. */
+.rp-sources { display: flex; align-items: center; gap: 8px; min-width: 0; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
+.rp-sources::-webkit-scrollbar { display: none; }
+.rp-sources-ico { flex: 0 0 auto; color: #8a8a93; display: inline-flex; }
+.rp-sources-ico svg { width: 20px; height: 20px; }
+.rp-ctrl .now-opt { flex: 0 0 auto; height: 38px; display: inline-flex; align-items: center; }
+.rp-ctrl .now-opt:focus { transform: scale(1.06); }
+/* Play gigante central quando pausado. */
+.rp-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 8; width: 92px; height: 92px; border-radius: 50%; border: 0; background: rgba(0,0,0,.5); color: #fff; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: background .15s, transform .15s; pointer-events: auto; }
+.rp-center svg { width: 46px; height: 46px; margin-left: 4px; }
+.rp-center:hover { background: #e50914; transform: translate(-50%, -50%) scale(1.06); }
 .live-fallback { position: absolute; bottom: 14px; left: 14px; background: rgba(0,0,0,.72); color: #ffd34d; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 8px; }
 .chan-now { flex: 0 0 auto; padding: 10px 18px 12px; background: #0b0b0f; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .now-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -165,6 +205,12 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .now-opt:hover, .now-opt:focus { border-color: #16b39b; outline: none; }
 .now-opt.on { background: #16b39b; color: #04211c; border-color: #16b39b; font-weight: 700; }
 .status { padding: 10px 24px; color: #bbb; }
+/* Loading da marca antes da tela de seleção (conectando ao provedor). */
+.boot { position: fixed; inset: 0; background: radial-gradient(120% 120% at 50% 30%, #1a0406 0%, #000 70%); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; }
+.boot-mark { font-size: 54px; font-weight: 800; letter-spacing: 3px; color: #e50914; text-shadow: 0 4px 30px rgba(229,9,20,.4); }
+.boot-spin { width: 40px; height: 40px; border-radius: 50%; border: 4px solid rgba(255,255,255,.18); border-top-color: #e50914; animation: spin .8s linear infinite; }
+.boot-status { color: #cfcfd4; font-size: 15px; font-weight: 600; }
+.boot-status.err { color: #ff6b6b; }
 /* Estado de carregamento centralizado (engine conectando / catálogo) — nunca
    deixa a seção parecer "em branco/travada" após navegar. */
 .connecting { flex: 1; min-height: 60vh; display: flex; align-items: center; justify-content: center; gap: 12px; color: #cfcfd4; font-size: 18px; font-weight: 600; }
@@ -219,7 +265,7 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .vb-play:hover, .vb-play:focus { background: #e50914; color: #fff; outline: none; }
 .vod-rows { padding-top: 0; }
 /* Preview flutuante do item em foco (aparece ao navegar os cards com o board fora da tela). */
-.vod-preview { position: fixed; right: 24px; bottom: 22px; z-index: 30; display: flex; gap: 14px; width: min(540px, 46vw); padding: 14px; border-radius: 14px; background: linear-gradient(120deg, rgba(14,14,18,.97), rgba(14,14,18,.82)); border: 1px solid #26262e; box-shadow: 0 12px 40px rgba(0,0,0,.6); pointer-events: none; backdrop-filter: blur(6px); animation: previewIn .16s ease; }
+.vod-preview { position: fixed; right: 24px; bottom: 22px; z-index: 30; display: flex; gap: 14px; width: min(540px, 46vw); padding: 14px; border-radius: 14px; background: linear-gradient(120deg, rgba(14,14,18,.97), rgba(14,14,18,.82)); border: 1px solid #26262e; box-shadow: 0 12px 40px rgba(0,0,0,.6); pointer-events: none; animation: previewIn .16s ease; }
 @keyframes previewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .vod-preview-poster { width: 78px; height: 117px; flex: 0 0 auto; object-fit: cover; border-radius: 8px; }
 .vod-preview-info { min-width: 0; display: flex; flex-direction: column; }
@@ -243,6 +289,8 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .vod-cat-count { font-size: 13px; color: #8a8a93; font-weight: 600; margin-left: 8px; }
 .vod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px; margin-top: 10px; }
 .vod-grid .tile.poster { width: 100%; height: auto; aspect-ratio: 2/3; }
+.vod-more { display: block; margin: 22px auto 4px; padding: 12px 28px; border-radius: 10px; border: 1px solid #2a2a33; background: #16161c; color: #e7e7ee; font-size: 15px; font-weight: 700; cursor: pointer; }
+.vod-more:focus, .vod-more:hover { outline: none; background: #e50914; border-color: #e50914; color: #fff; transform: scale(1.04); }
 
 /* ---- Hero / banner de destaque ---- */
 .hero { position: relative; height: 56vh; min-height: 320px; background-size: cover; background-position: center 20%; display: flex; align-items: flex-end; margin-bottom: 6px; }
@@ -268,10 +316,21 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .player.nocursor { cursor: none; }
 .player-video { width: 100%; height: 100%; background: #000; object-fit: contain; }
 /* Barra de progresso (filme/série) dentro do overlay reutilizado .live-ov */
-.player-seek { position: absolute; left: 0; right: 0; bottom: 92px; display: flex; align-items: center; gap: 14px; padding: 0 26px; }
+.player-seek { position: absolute; left: 0; right: 0; bottom: 104px; display: flex; align-items: center; gap: 14px; padding: 0 30px; }
 .player-time { color: #e6e6ea; font-size: 13px; font-weight: 700; flex: 0 0 auto; min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
-.player-bar-track { flex: 1 1 auto; height: 6px; border-radius: 999px; background: rgba(255,255,255,.25); overflow: hidden; }
+.player-bar-track { position: relative; flex: 1 1 auto; height: 6px; border-radius: 999px; background: rgba(255,255,255,.28); cursor: pointer; transition: height .12s; }
+.player-bar-track:hover { height: 8px; }
 .player-bar-track i { display: block; height: 100%; background: #e50914; border-radius: 999px; }
+.player-knob { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; background: #e50914; box-shadow: 0 0 0 4px rgba(229,9,20,.3); transform: translate(-50%, -50%); pointer-events: none; transition: width .1s, height .1s; }
+/* Barra de tempo focável (zona de scrub) + miniatura de prévia (estilo Netflix). */
+.player-bar-wrap { position: relative; flex: 1 1 auto; padding: 13px 0; cursor: pointer; outline: none; }
+.player-bar-wrap:focus .player-bar-track, .player-bar-wrap.scrubbing .player-bar-track { height: 8px; }
+.player-bar-wrap:focus .player-knob, .player-bar-wrap.scrubbing .player-knob { width: 18px; height: 18px; box-shadow: 0 0 0 6px rgba(229,9,20,.4); }
+.player-preview { position: absolute; bottom: 32px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 7px; pointer-events: none; z-index: 3; }
+.player-preview-frame { position: relative; border-radius: 10px; border: 2px solid #fff; box-shadow: 0 10px 30px rgba(0,0,0,.75); overflow: hidden; background: #0a0a0e; line-height: 0; }
+.player-preview-img { display: block; width: 256px; height: 144px; max-width: 38vw; object-fit: cover; }
+.player-preview-spin { position: absolute; top: 50%; left: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 3px solid rgba(255,255,255,.25); border-top-color: #e50914; animation: spin .8s linear infinite; }
+.player-preview-time { background: rgba(0,0,0,.88); color: #fff; font-size: 13px; font-weight: 800; padding: 3px 11px; border-radius: 6px; font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
 .player-err { position: absolute; bottom: 40px; left: 0; right: 0; text-align: center; color: #fff; }
 .player-err button { margin-left: 10px; background: #e50914; color: #fff; border: 0; padding: 8px 14px; border-radius: 6px; cursor: pointer; }
 
@@ -330,7 +389,7 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
    foco do controle na TV). Nome próprio p/ não colidir com o wrapper .home.games. */
 .games-grid { padding-top: 8px; flex: 1; min-height: 0; overflow-y: auto; }
 .games-grid .row h2 { display: flex; align-items: center; gap: 8px; }
-.dot-live { width: 11px; height: 11px; border-radius: 50%; background: #e50914; box-shadow: 0 0 0 0 rgba(229,9,20,.6); animation: pulse 1.6s infinite; }
+.dot-live { width: 11px; height: 11px; border-radius: 50%; background: #e50914; animation: rp-pulse 1.6s ease-in-out infinite; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(229,9,20,.6); } 70% { box-shadow: 0 0 0 9px rgba(229,9,20,0); } 100% { box-shadow: 0 0 0 0 rgba(229,9,20,0); } }
 
 /* card base */
@@ -360,7 +419,7 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .g-when { font-size: 11px; font-weight: 800; letter-spacing: .5px; color: #aeb6c4; text-transform: uppercase; }
 .g-livepill { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 900; letter-spacing: .8px;
     background: #e50914; color: #fff; padding: 4px 10px; border-radius: 999px; }
-.g-livepill i { width: 7px; height: 7px; border-radius: 50%; background: #fff; animation: pulse 1.6s infinite; }
+.g-livepill i { width: 7px; height: 7px; border-radius: 50%; background: #fff; animation: rp-pulse 1.6s ease-in-out infinite; }
 
 .g-match { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; }
 .g-team { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 1; min-width: 0; }
