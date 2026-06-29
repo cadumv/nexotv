@@ -1,6 +1,6 @@
 {
   "name": "@nexotv/app",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Proza — app (UI estilo Netflix + engine do core, empacotado via Capacitor)",
   "private": true,
   "type": "module",
