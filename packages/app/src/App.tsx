@@ -1573,6 +1573,7 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const [loading, setLoading] = useState(true);
     const [paused, setPaused] = useState(false);
     const [muted, setMuted] = useState(false);
+    const [isFs, setIsFs] = useState(false);
     const [cur, setCur] = useState(0);
     const [dur, setDur] = useState(0);
     const [showCtrl, setShowCtrl] = useState(true);
@@ -1617,6 +1618,18 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
         return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', sync); };
     }, []);
 
+    // Tela cheia: acompanha o estado e, no PC, já entra em tela cheia ao abrir o filme
+    // (na TV o app já ocupa a tela toda). Sai da tela cheia ao fechar o player.
+    useEffect(() => {
+        const onFsChange = () => setIsFs(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', onFsChange);
+        if (!LOW_POWER) { try { boxRef.current?.requestFullscreen?.().catch(() => { }); } catch { } }
+        return () => {
+            document.removeEventListener('fullscreenchange', onFsChange);
+            if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { });
+        };
+    }, []);
+
     // Controlador da barra: some após 4s parado, reaparece em qualquer ação.
     const setShow = useCallback((b: boolean) => { showRef.current = b; setShowCtrl(b); }, []);
     const reveal = useCallback(() => { setShow(true); clearTimeout(hideTimer.current); hideTimer.current = setTimeout(() => setShow(false), 4000); }, [setShow]);
@@ -1625,6 +1638,13 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
     const togglePlay = () => { const v = ref.current; if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
     const toggleMute = () => { const v = ref.current; if (!v) return; v.muted = !v.muted; reveal(); };
+    // Tela cheia REAL (Fullscreen API) — no PC preenche o monitor, não só a janela.
+    const toggleFs = () => {
+        const el = boxRef.current; if (!el) return;
+        if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { });
+        else el.requestFullscreen?.().catch(() => { });
+        reveal();
+    };
     const seek = (delta: number) => { const v = ref.current; if (!v) return; try { v.currentTime = Math.max(0, Math.min((v.duration || 1e9), v.currentTime + delta)); } catch { } reveal(); };
 
     // === Scrubbing com miniatura (estilo Netflix) ===
@@ -1675,10 +1695,17 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
             if (e.key === 'Escape' || e.key === 'Backspace') return; // useBackHandler trata
             const k = e.key;
             const isEnter = k === 'Enter' || k === ' ' || k === 'NumpadEnter';
+            if (k === 'f' || k === 'F') { e.preventDefault(); e.stopPropagation(); toggleFs(); return; }
             // Enter na zona BOTÕES dispara o <button> focado nativamente — não intercepta.
             if (isEnter && zoneRef.current === 'btn') { reveal(); return; }
             e.stopPropagation();
-            if (!showRef.current) { e.preventDefault(); reveal(); zoneRef.current = 'bar'; barRef.current?.focus(); return; }
+            if (!showRef.current) {
+                e.preventDefault(); reveal();
+                // Espaço / OK do controle PAUSAM mesmo com a barra escondida (não só "acordam").
+                if (isEnter) togglePlay();
+                else { zoneRef.current = 'bar'; barRef.current?.focus(); }
+                return;
+            }
             reveal();
             if (zoneRef.current === 'bar') {
                 if (k === 'ArrowRight') { e.preventDefault(); stepScrub(1); }
@@ -1746,6 +1773,7 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
                     <button className="rp-btn rp-primary" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}><RIcon n={paused ? 'play' : 'pause'} /></button>
                     <button className="rp-btn rp-seek" onClick={() => seek(30)} aria-label="Avançar 30s" title="+30s"><RIcon n="fwd" /><small>30</small></button>
                     <button className="rp-btn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}><RIcon n={muted ? 'mute' : 'vol'} /></button>
+                    <button className="rp-btn" onClick={toggleFs} aria-label={isFs ? 'Sair da tela cheia' : 'Tela cheia'} title={isFs ? 'Sair da tela cheia' : 'Tela cheia'}><RIcon n={isFs ? 'fsExit' : 'fs'} /></button>
                     <button className="rp-btn rp-exit" onClick={onClose} aria-label="Fechar" title="Fechar"><RIcon n="close" /></button>
                 </div>
             </div>
