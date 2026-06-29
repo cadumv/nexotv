@@ -445,3 +445,26 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
 .game-card.g-hero .g-comp { font-size: 12px; }
 .game-card.g-hero .g-watch { background: #fff; color: #000; padding: 9px 20px; border-radius: 8px; font-size: 14px; }
 .game-card.g-hero:hover .g-watch, .game-card.g-hero:focus .g-watch { background: #e50914; color: #fff; }
+
+/* Banner de atualização (PC e TV) — barra fina fixa no topo, acima de tudo. */
+.update-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 60;
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 20px;
+    background: linear-gradient(90deg, #1a1f3a, #11142a);
+    border-bottom: 1px solid rgba(255, 255, 255, .12);
+    color: #fff; font-size: 14px; font-weight: 700;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
+}
+.update-dot { width: 9px; height: 9px; border-radius: 50%; background: #34d058; box-shadow: 0 0 0 4px rgba(52, 208, 88, .25); flex: none; }
+.update-msg { flex: 1; }
+.update-btn {
+    background: #e50914; color: #fff; border: 0; cursor: pointer;
+    padding: 8px 18px; border-radius: 8px; font-size: 14px; font-weight: 800;
+}
+.update-btn:hover, .update-btn:focus { background: #ff2630; outline: 3px solid #fff; outline-offset: 2px; }
+.update-x {
+    background: transparent; color: #c9cee0; border: 0; cursor: pointer;
+    font-size: 16px; padding: 4px 8px; border-radius: 6px;
+}
+.update-x:hover, .update-x:focus { color: #fff; outline: 3px solid #fff; outline-offset: 2px; }

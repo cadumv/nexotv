@@ -8,12 +8,20 @@ const http = require('http');
 const fs = require('fs');
 
 // Store em ARQUIVO (login/favoritos/etc.) — gravado na hora, independente de porta.
-const STORE_FILE = () => path.join(app.getPath('userData'), 'rajada-store.json');
+const STORE_FILE = () => path.join(app.getPath('userData'), 'proza-store.json');
+// Migração de marca: se ainda não existe o store novo mas existe o antigo
+// (rajada-store.json), copia uma vez — não perde login/histórico no desktop.
+(function migrateDesktopStore() {
+  try {
+    const np = STORE_FILE(); const op = path.join(app.getPath('userData'), 'rajada-store.json');
+    if (!fs.existsSync(np) && fs.existsSync(op)) fs.copyFileSync(op, np);
+  } catch { /* noop */ }
+})();
 function readStore() { try { return JSON.parse(fs.readFileSync(STORE_FILE(), 'utf8')); } catch { return {}; } }
 function writeStore(obj) { try { fs.writeFileSync(STORE_FILE(), JSON.stringify(obj)); } catch { /* noop */ } }
-ipcMain.on('rajada-store-get', (e) => { e.returnValue = readStore(); });
-ipcMain.on('rajada-store-set', (_e, { k, v }) => { const s = readStore(); s[k] = v; writeStore(s); });
-ipcMain.on('rajada-store-del', (_e, k) => { const s = readStore(); delete s[k]; writeStore(s); });
+ipcMain.on('proza-store-get', (e) => { e.returnValue = readStore(); });
+ipcMain.on('proza-store-set', (_e, { k, v }) => { const s = readStore(); s[k] = v; writeStore(s); });
+ipcMain.on('proza-store-del', (_e, k) => { const s = readStore(); delete s[k]; writeStore(s); });
 
 const DIST = path.join(__dirname, '..', 'dist');
 const MIME = {
@@ -63,7 +71,7 @@ async function createWindow() {
     height: 820,
     backgroundColor: '#0b0b0f',
     autoHideMenuBar: true,
-    title: 'Rajada',
+    title: 'Proza',
     webPreferences: {
       webSecurity: false,          // libera fetch HTTP do provedor (sem CORS/mixed-content)
       allowRunningInsecureContent: true,
@@ -75,6 +83,34 @@ async function createWindow() {
   // Links externos abrem no navegador padrão, não dentro do app.
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   win.loadURL(`http://127.0.0.1:${port}/`);
+  setupAutoUpdate(win);
+}
+
+// Auto-update do desktop via electron-updater (lê o feed do GitHub Releases — config
+// `publish` do package.json, embutida no app-update.yml do build). Baixa em segundo
+// plano e avisa o renderer (banner) quando há atualização / quando está pronta.
+function setupAutoUpdate(win) {
+  if (!app.isPackaged) return; // dev/launch.cjs: sem updater
+  let autoUpdater;
+  try { ({ autoUpdater } = require('electron-updater')); }
+  catch { return; } // electron-updater não instalado: segue sem update
+  const send = (ch, payload) => { try { win.webContents.send(ch, payload); } catch { } };
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('update-available', (info) => send('proza-update-available', { version: info?.version }));
+  autoUpdater.on('download-progress', (p) => send('proza-update-progress', { percent: Math.round(p?.percent || 0) }));
+  autoUpdater.on('update-downloaded', (info) => send('proza-update-downloaded', { version: info?.version }));
+  autoUpdater.on('error', (err) => send('proza-update-error', String(err && err.message || err)));
+
+  ipcMain.removeAllListeners('proza-update-install');
+  ipcMain.on('proza-update-install', () => { try { autoUpdater.quitAndInstall(); } catch { } });
+  ipcMain.removeAllListeners('proza-update-check');
+  ipcMain.on('proza-update-check', () => { autoUpdater.checkForUpdates().catch(() => { }); });
+
+  // Checa logo após abrir e depois a cada 6h.
+  setTimeout(() => autoUpdater.checkForUpdates().catch(() => { }), 8000);
+  setInterval(() => autoUpdater.checkForUpdates().catch(() => { }), 6 * 60 * 60 * 1000);
 }
 
 // Instância única: 2ª abertura foca a janela existente (e não colide na porta fixa).

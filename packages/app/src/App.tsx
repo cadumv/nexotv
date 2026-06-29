@@ -3,6 +3,7 @@ import Hls from 'hls.js';
 import { attachAdaptive, createThumbnailer, type Thumbnailer } from './player';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine, tmdbPoster, tmdbTrendingPoster } from './engineHost';
+import { UpdateBanner } from './UpdateBanner';
 
 const LS_KEY = 'proza.config.v1';
 
@@ -391,12 +392,13 @@ function App() {
     // Enquanto conecta ao provedor (IPTV pode demorar), mostra um loading da marca ANTES
     // da tela de seleção — evita os cards aparecerem sem imagem / entrar numa seção vazia.
     if (section === 'pick' && !engine) return <BootScreen status={status || 'Conectando ao provedor…'} error={/^erro/i.test(status)} />;
-    if (section === 'pick') return <PickScreen onPick={setSection} onLogout={logout} status="" art={pickArt} />;
+    if (section === 'pick') return (<><UpdateBanner /><PickScreen onPick={setSection} onLogout={logout} status="" art={pickArt} /></>);
 
     const cwAll = cw.filter((m: any) => m.type === 'movie' || m.type === 'series');
 
     return (
         <div className={`home ${section}`} ref={homeRef}>
+            <UpdateBanner />
             <header className="topbar">
                 <button className="brand-sm" tabIndex={-1} onClick={() => setSection('pick')}>Proza</button>
                 <nav className="tabs-top">

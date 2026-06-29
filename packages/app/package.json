@@ -1,10 +1,10 @@
 {
   "name": "@nexotv/app",
-  "version": "0.1.0",
-  "description": "Rajada — app (UI estilo Netflix + engine do core, empacotado via Capacitor)",
+  "version": "1.0.0",
+  "description": "Proza — app (UI estilo Netflix + engine do core, empacotado via Capacitor)",
   "private": true,
   "type": "module",
-  "author": "Rajada",
+  "author": "Proza",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
@@ -19,12 +19,21 @@
     "desktop:build": "vite build && electron-builder --win --x64",
     "tv:stage:tizen": "vite build && node tv/stage.mjs tizen",
     "tv:stage:webos": "vite build && node tv/stage.mjs webos",
-    "pack:tizen": "vite build && node tv/stage.mjs tizen && tizen build-web -- tv/build/tizen && tizen package -t wgt -s rajada -- tv/build/tizen/.buildResult",
-    "pack:webos": "vite build && node tv/stage.mjs webos && ares-package tv/build/webos -o tv/build"
+    "pack:tizen": "vite build && node tv/stage.mjs tizen && tizen build-web -- tv/build/tizen && tizen package -t wgt -s proza -- tv/build/tizen/.buildResult",
+    "pack:webos": "vite build && node tv/stage.mjs webos && ares-package tv/build/webos -o tv/build",
+    "version:sync": "node scripts/version-sync.mjs",
+    "release": "node scripts/release.mjs"
   },
   "build": {
-    "appId": "com.rajada.desktop",
-    "productName": "Rajada",
+    "appId": "com.proza.desktop",
+    "productName": "Proza",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "cadumv",
+        "repo": "nexotv"
+      }
+    ],
     "directories": {
       "output": "dist-electron"
     },
@@ -47,6 +56,7 @@
     "@capacitor/app": "^6.0.0",
     "@capacitor/core": "^6.0.0",
     "@nexotv/core": "workspace:*",
+    "electron-updater": "^6.3.9",
     "hls.js": "^1.6.16",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
