@@ -99,7 +99,8 @@ if (!existsSync(join(OUT, 'latest.yml'))) {
 // --- 3) GitHub Release -------------------------------------------------------
 console.log('\n--- Publicando no GitHub Releases ---');
 const assets = readdirSync(OUT).map((f) => join(OUT, f));
-const ghArgs = ['release', 'create', tag, '--title', `Proza ${version}`, ...assets];
+// -R explicito: o repo pode ter um 'upstream' e o gh mira o upstream por padrao.
+const ghArgs = ['release', 'create', tag, '-R', 'cadumv/nexotv', '--target', 'main', '--title', `Proza ${version}`, ...assets];
 if (notes) ghArgs.push('--notes', notes);
 else ghArgs.push('--generate-notes');
 run('gh', ghArgs);
