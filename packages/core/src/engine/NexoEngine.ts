@@ -640,7 +640,7 @@ export class NexoEngine {
             [/libertador/, 'Libertadores'],
             [/sul-?americ|sudameric/, 'Sul-Americana'],
             [/recopa/, 'Recopa'],
-            [/copa do mundo|world cup|mundial de clubes|club world/, 'Copa do Mundo'],
+            [/copa do mundo|world cup|world championship|mundial de clubes|club world/, 'Copa do Mundo'],
             [/eliminat[óo]ri|qualifier|qualifica/, 'Eliminatórias'],
             [/champions|liga dos campe/, 'Champions League'],
             [/europa league|liga europa/, 'Europa League'],
@@ -785,7 +785,8 @@ export class NexoEngine {
         if (!full) return '';
         const t = full.toLowerCase();
         let base = '';
-        if (t.includes('world cup') || t.includes('copa do mundo')) base = t.includes('club') ? 'Mundial de Clubes' : 'Copa do Mundo';
+        // Sofascore chama a Copa do Mundo de "World Championship" (ex.: "World Championship, Knockout").
+        if (t.includes('world cup') || t.includes('copa do mundo') || t.includes('world championship')) base = t.includes('club') ? 'Mundial de Clubes' : 'Copa do Mundo';
         else if (t.includes('copa america') || t.includes('conmebol america')) base = 'Copa America';
         else if (t.includes('libertadores')) base = 'Libertadores';
         else if (t.includes('sudamericana') || t.includes('sul-americana')) base = 'Sul-Americana';
@@ -811,6 +812,7 @@ export class NexoEngine {
             phase = phase
                 .replace(/group/i, 'Grupo').replace(/round of 16/i, 'Oitavas').replace(/round of 32/i, '32-avos')
                 .replace(/quarter-?finals?/i, 'Quartas').replace(/semi-?finals?/i, 'Semifinal')
+                .replace(/knockout/i, 'Mata-mata')
                 .replace(/final/i, 'Final').replace(/playoff/i, 'Playoff').trim();
         }
         return phase ? `${base} · ${phase}` : base;
