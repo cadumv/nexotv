@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import Hls from 'hls.js';
-import { attachAdaptive, createThumbnailer, type Thumbnailer } from './player';
+import type Hls from 'hls.js';
+import { attachAdaptive, createThumbnailer, loadHls, hlsNow, type Thumbnailer, type AdaptiveHandle, type Track } from './player';
 import type { AddonConfig, EngineOptions, NexoEngine } from '@nexotv/core';
 import { createEngine, tmdbPoster, tmdbTrendingPoster } from './engineHost';
 import { UpdateBanner } from './UpdateBanner';
@@ -197,7 +197,7 @@ function App() {
     const [gamesLoading, setGamesLoading] = useState(false);
     const [pickArt, setPickArt] = useState<{ vod?: string; tv?: string; live?: string }>({});
     const [picker, setPicker] = useState<{ title: string; options: { label: string; url: string }[] } | null>(null);
-    const [playing, setPlaying] = useState<{ url: string; title: string; key?: string; resumeFrom?: number } | null>(null);
+    const [playing, setPlaying] = useState<{ url: string; title: string; key?: string; resumeFrom?: number; episodes?: any[]; epIndex?: number; seriesName?: string } | null>(null);
     const [details, setDetails] = useState<any | null>(null); // tela de detalhes (filme/série)
     const [search, setSearch] = useState(false);              // overlay de busca
     const [cw, setCw] = useState<any[]>(() => { try { return JSON.parse(localStorage.getItem('proza.cw.v1') || '[]'); } catch { return []; } });
@@ -212,7 +212,20 @@ function App() {
             return next;
         });
     };
-    const play = (url: string, title: string, key?: string, resumeFrom?: number) => { setPicker(null); setPlaying({ url, title, key, resumeFrom }); };
+    const play = (url: string, title: string, key?: string, resumeFrom?: number, playlist?: { episodes: any[]; epIndex: number; seriesName: string }) => {
+        setPicker(null);
+        setPlaying({ url, title, key, resumeFrom, episodes: playlist?.episodes, epIndex: playlist?.epIndex, seriesName: playlist?.seriesName });
+    };
+    // Próximo episódio (botão "Próximo" / autoplay ao terminar): resolve o stream do
+    // episódio seguinte da playlist e troca sem fechar o player.
+    const playNextFrom = useCallback(async (p: { episodes?: any[]; epIndex?: number; seriesName?: string }) => {
+        if (!engine || !p.episodes || p.epIndex == null) return;
+        const ni = p.epIndex + 1; const ep = p.episodes[ni]; if (!ep) return;
+        try {
+            const s = await engine.getStreams(ep.id);
+            if (s[0]?.url) setPlaying({ url: s[0].url, title: `${p.seriesName} · S${ep.season}E${ep.episode}`, key: ep.id, resumeFrom: getProg(ep.id)?.pos || 0, episodes: p.episodes, epIndex: ni, seriesName: p.seriesName });
+        } catch { /* sem stream pro próximo */ }
+    }, [engine]);
     // Abre a tela de detalhes (filme/série) e registra em "Continuar assistindo".
     const openDetails = useCallback((meta: any) => { recordCw(meta); setDetails(meta); }, []);
 
@@ -445,8 +458,11 @@ function App() {
                 onDetails={(m) => { setSearch(false); openDetails(m); }}
                 onPlayChannel={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }}
                 onPlayGame={async (m) => { try { const s = await engine.getStreams(m.id); if (s[0]?.url) { setSearch(false); play(s[0].url, m.name); } } catch { } }} />}
-            {details && engine && <DetailsView engine={engine} meta={details} onClose={() => setDetails(null)} onPlay={(u, t, k, r) => { setDetails(null); play(u, t, k, r); }} />}
-            {playing && <Player url={playing.url} title={playing.title} contentKey={playing.key} resumeFrom={playing.resumeFrom} onClose={() => setPlaying(null)} />}
+            {details && engine && <DetailsView engine={engine} meta={details} onClose={() => setDetails(null)} onPlay={(u, t, k, r, pl) => { setDetails(null); play(u, t, k, r, pl); }} />}
+            {playing && <Player url={playing.url} title={playing.title} contentKey={playing.key} resumeFrom={playing.resumeFrom}
+                hasNext={!!(playing.episodes && playing.epIndex != null && playing.epIndex + 1 < playing.episodes.length)}
+                onNext={() => playNextFrom(playing)}
+                onClose={() => setPlaying(null)} />}
         </div>
     );
 }
@@ -1297,7 +1313,7 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
     const idxRef = useRef(0);                  // fonte atual na cadeia (frente)
     const srcRef = useRef<string[]>(sources);
     const recoverRef = useRef(0);
-    const mutedRef = useRef(false);
+    const mutedRef = useRef(loadVol().muted);
     const onZapRef = useRef(onZap); onZapRef.current = onZap;
     const spinTimer = useRef<any>(null);
     const preUrlRef = useRef<string | null>(null);   // url pré-carregada na janela de trás
@@ -1309,7 +1325,7 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
     const [fs, setFs] = useState(false);
     const [showCtrl, setShowCtrl] = useState(true);
     const [paused, setPaused] = useState(false);
-    const [muted, setMuted] = useState(false);
+    const [muted, setMuted] = useState(() => loadVol().muted);
     const showRef = useRef(true);
     const hideTimer = useRef<any>(null);
     const startTimer = useRef<any>(null);
@@ -1327,24 +1343,30 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
     const MAINBUF = LOW_POWER ? 24 : 30;
     const HLS_CFG: any = { enableWorker: true, lowLatencyMode: false, startFragPrefetch: true, startLevel: 0, abrEwmaDefaultEstimate: 800000, liveSyncDurationCount: 3, maxBufferLength: MAINBUF, maxMaxBufferLength: MAINBUF * 2, backBufferLength: 15, manifestLoadingTimeOut: 7000, fragLoadingTimeOut: 18000, manifestLoadingMaxRetry: 3, levelLoadingMaxRetry: 4, fragLoadingMaxRetry: 6 };
 
+    // Pré-carrega o hls.js assim que o player ao vivo monta (chunk lazy) — quando o
+    // usuário escolher um canal, já está pronto (sem o atraso da 1ª carga).
+    useEffect(() => { loadHls(); }, []);
+
     // Toca a fonte i NA JANELA DA FRENTE (failover automático se a fonte falhar).
     const playAt = useCallback((i: number) => {
         const fi = frontRef.current; const v = elAt(fi); const url = srcRef.current[i];
         if (!v || !url) return;
+        const HlsC = hlsNow();
+        if (!HlsC) { loadHls().then(() => playAt(i)); return; }   // 1ª vez: espera o hls.js (chunk lazy)
         idxRef.current = i; setAlt(i);
         const nextSrc = () => { const ni = idxRef.current + 1; if (ni < srcRef.current.length) { recoverRef.current = 0; playAt(ni); } else setDead(true); };
         clearTimeout(startTimer.current);
         startTimer.current = setTimeout(() => { if (v.readyState < 3 && v.currentTime < 0.1) nextSrc(); }, 9000);
-        if (Hls.isSupported()) {
+        if (HlsC.isSupported()) {
             let hls = hlsAt(fi);
             if (!hls) {
-                hls = new Hls(HLS_CFG);
-                hls.attachMedia(v);
-                hls.on(Hls.Events.ERROR, (_e, d) => {
+                hls = new HlsC(HLS_CFG);
+                hls!.attachMedia(v);
+                hls!.on(HlsC.Events.ERROR, (_e: any, d: any) => {
                     if (!d.fatal) return;
                     if (hlsAt(frontRef.current) !== hls) return;   // erro de janela demovida → ignora
-                    if (d.type === Hls.ErrorTypes.NETWORK_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.startLoad(); } catch { } return; }
-                    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.recoverMediaError(); } catch { } return; }
+                    if (d.type === HlsC.ErrorTypes.NETWORK_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.startLoad(); } catch { } return; }
+                    if (d.type === HlsC.ErrorTypes.MEDIA_ERROR && recoverRef.current < 4) { recoverRef.current++; try { hls!.recoverMediaError(); } catch { } return; }
                     nextSrc();
                 });
                 setHlsAt(fi, hls);
@@ -1366,13 +1388,14 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
         const bi = 1 - frontRef.current; const v = elAt(bi); if (!v) return;
         const old = hlsAt(bi); if (old) { try { old.destroy(); } catch { } setHlsAt(bi, null); }
         preCappedRef.current = false; preUrlRef.current = url;
-        if (!Hls.isSupported()) { preUrlRef.current = null; return; }
-        const hls = new Hls({ ...HLS_CFG, maxBufferLength: 6, maxMaxBufferLength: 6 });
+        const HlsC = hlsNow();
+        if (!HlsC || !HlsC.isSupported()) { preUrlRef.current = null; return; }   // sem hls.js ainda → pula prefetch (otimização)
+        const hls = new HlsC({ ...HLS_CFG, maxBufferLength: 6, maxMaxBufferLength: 6 });
         // Para de baixar após ter ~2 segmentos no buffer (gasta o mínimo de banda).
-        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+        hls.on(HlsC.Events.FRAG_BUFFERED, () => {
             try { const b = v.buffered; if (b.length && !preCappedRef.current) { preCappedRef.current = true; hls.stopLoad(); } } catch { }
         });
-        hls.on(Hls.Events.ERROR, (_e, d) => {
+        hls.on(HlsC.Events.ERROR, (_e: any, d: any) => {
             if (!d.fatal) return;
             // prefetch falhou (ex.: limite de conexão) → descarta; o canal nunca será promovido vazio.
             try { hls.destroy(); } catch { } if (hlsAt(bi) === hls) setHlsAt(bi, null); preUrlRef.current = null;
@@ -1463,7 +1486,7 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
     const focusCtrl = (idx = 0) => { const b = ctrlButtons(); (b[Math.max(0, Math.min(b.length - 1, idx))])?.focus(); };
     const moveCtrl = (dir: 1 | -1) => { const b = ctrlButtons(); if (!b.length) return; const cur = b.indexOf(document.activeElement as HTMLElement); const ni = cur < 0 ? 0 : Math.max(0, Math.min(b.length - 1, cur + dir)); b[ni].focus(); };
     const togglePlay = () => { const v = vEl(); if (!v) return; if (v.paused) v.play().catch(() => { }); else v.pause(); reveal(); };
-    const toggleMute = () => { const v = vEl(); if (!v) return; v.muted = !v.muted; mutedRef.current = v.muted; reveal(); };
+    const toggleMute = () => { const v = vEl(); if (!v) return; v.muted = !v.muted; mutedRef.current = v.muted; setMuted(v.muted); saveVol(v.volume, v.muted); reveal(); };
     useBackHandler(fs, () => setFs(false));   // Voltar do controle sai da tela cheia (não do app)
     // (play/mudo já sincronizam pelos listeners das duas janelas — ver efeito de status acima.)
 
@@ -1506,6 +1529,21 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
         window.addEventListener('mousemove', onMove, true);
         return () => { clearTimeout(t); clearTimeout(hideTimer.current); window.removeEventListener('keydown', onKey, true); window.removeEventListener('mousemove', onMove, true); };
     }, [fs, reveal, setShow]);
+
+    // Tela cheia REAL no PC: o modo `fs` (que já cobre a janela) também pede a Fullscreen
+    // API pra preencher o MONITOR. Na TV o app já ocupa a tela toda (LOW_POWER) — pula.
+    useEffect(() => {
+        if (LOW_POWER) return;
+        const el = boxRef.current;
+        if (fs) { try { el?.requestFullscreen?.().catch(() => { }); } catch { } }
+        else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => { });
+    }, [fs]);
+    // Se sair da tela cheia pelo navegador/Esc, fecha o modo fs (mantém em sincronia).
+    useEffect(() => {
+        const onFsChange = () => { if (!document.fullscreenElement && fs) setFs(false); };
+        document.addEventListener('fullscreenchange', onFsChange);
+        return () => document.removeEventListener('fullscreenchange', onFsChange);
+    }, [fs]);
     const trying = alt > 0 && !dead;
     const active = sources[0];
     const canFs = !!sources.length;
@@ -1563,7 +1601,7 @@ function LivePlayer({ sources, title, options, onPick, onZap, prefetch }: {
 /** Player VOD (filme/série): mesma interface do player ao vivo — fundo preto, SEM
  *  controles nativos cinzas, barra própria que some sozinha, navegável por controle
  *  remoto (D-pad). HLS via hls.js; senão <video> nativo; fallback "abrir externo". */
-function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; title: string; contentKey?: string; resumeFrom?: number; onClose: () => void }) {
+function Player({ url, title, contentKey, resumeFrom, onClose, hasNext, onNext }: { url: string; title: string; contentKey?: string; resumeFrom?: number; onClose: () => void; hasNext?: boolean; onNext?: () => void }) {
     const ref = useRef<HTMLVideoElement>(null);
     const boxRef = useRef<HTMLDivElement>(null);
     const ctrlRef = useRef<HTMLDivElement>(null);
@@ -1574,6 +1612,11 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
     const [paused, setPaused] = useState(false);
     const [muted, setMuted] = useState(false);
     const [isFs, setIsFs] = useState(false);
+    const [rate, setRate] = useState(1);
+    const rateRef = useRef(1);
+    const handleRef = useRef<AdaptiveHandle | null>(null);
+    const [audioTracks, setAudioTracks] = useState<Track[]>([]);
+    const [subTracks, setSubTracks] = useState<Track[]>([]);
     const [cur, setCur] = useState(0);
     const [dur, setDur] = useState(0);
     const [showCtrl, setShowCtrl] = useState(true);
@@ -1591,7 +1634,10 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
 
     useEffect(() => {
         const v = ref.current; if (!v) return;
+        setAudioTracks([]); setSubTracks([]);   // zera ao trocar de mídia
         const handle = attachAdaptive(v, url, () => setErr(true));
+        handleRef.current = handle;
+        handle.onTracks(() => { setAudioTracks(handle.audioTracks()); setSubTracks(handle.subtitleTracks()); });
         if (resumeFrom && resumeFrom > 5) {
             const seek = () => { try { if (v.currentTime < 1) v.currentTime = resumeFrom; } catch { } };
             v.addEventListener('loadedmetadata', seek, { once: true });
@@ -1602,7 +1648,7 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
             if (!contentKey) return; const now = v.currentTime;
             if (Math.abs(now - last) >= 5) { last = now; saveProg(contentKey, now, v.duration); }
         };
-        const onPlaying = () => setLoading(false);
+        const onPlaying = () => { setLoading(false); try { v.playbackRate = rateRef.current; } catch { } };
         const onWaiting = () => setLoading(true);
         v.addEventListener('timeupdate', onTime);
         v.addEventListener('playing', onPlaying); v.addEventListener('canplay', onPlaying);
@@ -1610,13 +1656,24 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
         return () => { if (contentKey) saveProg(contentKey, v.currentTime, v.duration); v.removeEventListener('timeupdate', onTime); v.removeEventListener('playing', onPlaying); v.removeEventListener('canplay', onPlaying); v.removeEventListener('waiting', onWaiting); handle.destroy(); };
     }, [url]);
 
-    // Sincroniza play/mudo com o vídeo.
+    // Sincroniza play/mudo com o vídeo + lembra volume/mudo entre sessões.
     useEffect(() => {
         const v = ref.current; if (!v) return;
+        const sv = loadVol(); try { v.volume = sv.vol; v.muted = sv.muted; } catch { }
+        setMuted(v.muted);
         const sync = () => { setPaused(v.paused); setMuted(v.muted); };
-        v.addEventListener('play', sync); v.addEventListener('pause', sync); v.addEventListener('volumechange', sync);
-        return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', sync); };
+        const onVol = () => { setMuted(v.muted); saveVol(v.volume, v.muted); };
+        v.addEventListener('play', sync); v.addEventListener('pause', sync); v.addEventListener('volumechange', onVol);
+        return () => { v.removeEventListener('play', sync); v.removeEventListener('pause', sync); v.removeEventListener('volumechange', onVol); };
     }, []);
+
+    // Próximo episódio: ao TERMINAR o vídeo, já emenda no próximo (séries).
+    useEffect(() => {
+        const v = ref.current; if (!v) return;
+        const onEnded = () => { if (hasNext) onNext?.(); };
+        v.addEventListener('ended', onEnded);
+        return () => v.removeEventListener('ended', onEnded);
+    }, [hasNext, onNext]);
 
     // Tela cheia: acompanha o estado e, no PC, já entra em tela cheia ao abrir o filme
     // (na TV o app já ocupa a tela toda). Sai da tela cheia ao fechar o player.
@@ -1645,6 +1702,20 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
         else el.requestFullscreen?.().catch(() => { });
         reveal();
     };
+    // Velocidade de reprodução (cicla 1x → 1.25 → 1.5 → 2 → 0.5 → 0.75 → 1x).
+    const RATES = [1, 1.25, 1.5, 2, 0.5, 0.75];
+    const cycleRate = () => {
+        const v = ref.current; if (!v) return;
+        const i = RATES.indexOf(rateRef.current);
+        const nr = RATES[(i + 1) % RATES.length];
+        v.playbackRate = nr; rateRef.current = nr; setRate(nr); reveal();
+    };
+    // "Pular abertura": nos primeiros ~100s, salta pra 95s (intro típica de série).
+    const skipIntro = () => { const v = ref.current; if (!v) return; try { if (v.currentTime < 95) v.currentTime = 95; } catch { } reveal(); };
+    const refreshTracks = () => { const h = handleRef.current; if (h) { setAudioTracks(h.audioTracks()); setSubTracks(h.subtitleTracks()); } };
+    const pickAudio = (id: number) => { handleRef.current?.setAudioTrack(id); refreshTracks(); reveal(); };
+    const pickSub = (id: number) => { handleRef.current?.setSubtitleTrack(id); refreshTracks(); reveal(); };
+    const subOff = !subTracks.some(t => t.active);
     const seek = (delta: number) => { const v = ref.current; if (!v) return; try { v.currentTime = Math.max(0, Math.min((v.duration || 1e9), v.currentTime + delta)); } catch { } reveal(); };
 
     // === Scrubbing com miniatura (estilo Netflix) ===
@@ -1745,6 +1816,7 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
             )}
             <div className={`live-ov${showCtrl ? '' : ' hidden'}`}>
                 <div className="live-ov-top"><span className="live-ov-title">{title}</span></div>
+                {cur > 3 && cur < 100 && <button className="rp-skip" onClick={skipIntro}>Pular abertura ⏭</button>}
                 {paused && <button className="rp-center" tabIndex={-1} onClick={togglePlay} aria-label="Tocar"><RIcon n="play" /></button>}
                 <div className="player-seek">
                     <span className="player-time">{fmtTime(scrub != null ? scrub : cur)}</span>
@@ -1772,7 +1844,22 @@ function Player({ url, title, contentKey, resumeFrom, onClose }: { url: string; 
                     <button className="rp-btn rp-seek" onClick={() => seek(-10)} aria-label="Voltar 10s" title="−10s"><RIcon n="back" /><small>10</small></button>
                     <button className="rp-btn rp-primary" onClick={togglePlay} aria-label={paused ? 'Tocar' : 'Pausar'} title={paused ? 'Tocar' : 'Pausar'}><RIcon n={paused ? 'play' : 'pause'} /></button>
                     <button className="rp-btn rp-seek" onClick={() => seek(30)} aria-label="Avançar 30s" title="+30s"><RIcon n="fwd" /><small>30</small></button>
+                    {hasNext && <button className="rp-btn rp-next" onClick={onNext} aria-label="Próximo episódio" title="Próximo episódio"><RIcon n="fwd" /><small>EP</small></button>}
                     <button className="rp-btn" onClick={toggleMute} aria-label={muted ? 'Ativar som' : 'Mudo'} title={muted ? 'Ativar som' : 'Mudo'}><RIcon n={muted ? 'mute' : 'vol'} /></button>
+                    <button className="rp-btn rp-rate" onClick={cycleRate} aria-label="Velocidade" title="Velocidade">{rate}x</button>
+                    {audioTracks.length > 1 && (
+                        <div className="rp-sources" title="Áudio">
+                            <span className="rp-sources-lbl">Áudio</span>
+                            {audioTracks.map((t) => (<button key={'a' + t.id} className={`now-opt${t.active ? ' on' : ''}`} onClick={() => pickAudio(t.id)}>{t.label}</button>))}
+                        </div>
+                    )}
+                    {subTracks.length > 0 && (
+                        <div className="rp-sources" title="Legendas">
+                            <span className="rp-sources-lbl">CC</span>
+                            <button className={`now-opt${subOff ? ' on' : ''}`} onClick={() => pickSub(-1)}>Off</button>
+                            {subTracks.map((t) => (<button key={'s' + t.id} className={`now-opt${t.active ? ' on' : ''}`} onClick={() => pickSub(t.id)}>{t.label}</button>))}
+                        </div>
+                    )}
                     <button className="rp-btn" onClick={toggleFs} aria-label={isFs ? 'Sair da tela cheia' : 'Tela cheia'} title={isFs ? 'Sair da tela cheia' : 'Tela cheia'}><RIcon n={isFs ? 'fsExit' : 'fs'} /></button>
                     <button className="rp-btn rp-exit" onClick={onClose} aria-label="Fechar" title="Fechar"><RIcon n="close" /></button>
                 </div>
@@ -1830,6 +1917,14 @@ function saveProg(key: string, pos: number, dur: number) {
         localStorage.setItem(PROG_KEY, JSON.stringify(p));
     } catch { }
 }
+// Volume/mudo lembrados entre sessões (vale p/ todos os players).
+const VOL_KEY = 'proza.volume.v1';
+function loadVol(): { vol: number; muted: boolean } {
+    try { const v = JSON.parse(localStorage.getItem(VOL_KEY) || '{}'); return { vol: typeof v.vol === 'number' ? v.vol : 1, muted: !!v.muted }; }
+    catch { return { vol: 1, muted: false }; }
+}
+function saveVol(vol: number, muted: boolean) { try { localStorage.setItem(VOL_KEY, JSON.stringify({ vol, muted })); } catch { } }
+
 // Resolve o que tocar ao clicar "Continuar/Assistir" numa série.
 function resolveResume(videos: any[]): { ep: any; mode: 'continue' | 'next' | 'first' | 'rewatch'; pos: number } | null {
     if (!videos.length) return null;
@@ -1976,7 +2071,7 @@ function SearchView({ engine, context, games, onClose, onDetails, onPlayChannel,
  *  Filme → Assistir (retoma posição). Série → temporadas + episódios. */
 function DetailsView({ engine, meta, onClose, onPlay }: {
     engine: NexoEngine; meta: any; onClose: () => void;
-    onPlay: (url: string, title: string, key: string, resumeFrom: number) => void;
+    onPlay: (url: string, title: string, key: string, resumeFrom: number, playlist?: { episodes: any[]; epIndex: number; seriesName: string }) => void;
 }) {
     const [d, setD] = useState<any>(meta);
     const [loading, setLoading] = useState(true);
@@ -2025,7 +2120,14 @@ function DetailsView({ engine, meta, onClose, onPlay }: {
         try { const s = await engine.getStreams(meta.id); if (s[0]?.url) onPlay(s[0].url, d.name, meta.id, from); } catch { }
     };
     const playEp = async (ep: any, from?: number) => {
-        try { const s = await engine.getStreams(ep.id); if (s[0]?.url) onPlay(s[0].url, `${d.name} · S${ep.season}E${ep.episode}`, ep.id, from != null ? from : (getProg(ep.id)?.pos || 0)); } catch { }
+        try {
+            const s = await engine.getStreams(ep.id);
+            if (s[0]?.url) {
+                const ordered = [...videos].sort((a, b) => (a.season - b.season) || (a.episode - b.episode));
+                const idx = ordered.findIndex(v => v.id === ep.id);
+                onPlay(s[0].url, `${d.name} · S${ep.season}E${ep.episode}`, ep.id, from != null ? from : (getProg(ep.id)?.pos || 0), { episodes: ordered, epIndex: idx, seriesName: d.name });
+            }
+        } catch { }
     };
     const mProg = !isSeries ? getProg(meta.id) : null;
     // Série: o que tocar no botão principal (retoma / próximo / 1º episódio).

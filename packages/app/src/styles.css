@@ -468,3 +468,15 @@ html, body, #root { margin: 0; background: #000; color: #f5f5f7; font-family: 'S
     font-size: 16px; padding: 4px 8px; border-radius: 6px;
 }
 .update-x:hover, .update-x:focus { color: #fff; outline: 3px solid #fff; outline-offset: 2px; }
+
+/* Botão de velocidade no player (texto "1x" em vez de ícone). */
+.rp-btn.rp-rate { font-size: 15px; font-weight: 800; min-width: 46px; }
+/* "Pular abertura" — flutua no canto inferior direito, acima da barra. */
+.rp-skip {
+    position: absolute; right: 40px; bottom: 120px; z-index: 5;
+    background: rgba(20, 20, 28, .82); color: #fff; border: 1px solid rgba(255, 255, 255, .5);
+    padding: 11px 20px; border-radius: 8px; font-size: 15px; font-weight: 800; cursor: pointer;
+}
+.rp-skip:hover, .rp-skip:focus { background: #e50914; border-color: #fff; outline: 3px solid #fff; outline-offset: 2px; }
+/* Rótulo dos grupos de faixa (Áudio / CC) na barra do player. */
+.rp-sources-lbl { font-size: 12px; font-weight: 800; color: #c9cee0; margin: 0 6px 0 4px; text-transform: uppercase; letter-spacing: .03em; }
