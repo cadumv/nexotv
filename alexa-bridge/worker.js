@@ -204,21 +204,24 @@ async function buildAgenda(env) {
 // Versão do formato do cache. Suba este número sempre que mudar a LÓGICA de montar os
 // jogos (filtros, campos, etc.) → o cache antigo é ignorado no próximo deploy, sem
 // precisar apagar nada no KV manualmente.
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
+// `name` = rótulo CANÔNICO (em PT) enviado ao app — não dependemos do nome cru do
+// Sofascore, que vem inconsistente (ex.: a Copa do Mundo chega como "World Championship").
+// A fase (mata-mata/grupo) é anexada a partir do nome cru em buildTournaments.
 const TOURNAMENTS = [
-  { id: 325, broadcasters: ['Premiere', 'Sportv', 'TV Globo'] },              // Brasileirão Série A
-  { id: 390, broadcasters: ['Sportv', 'Premiere'] },                         // Brasileirão Série B
-  { id: 373, broadcasters: ['Premiere', 'Sportv', 'TV Globo'] },             // Copa do Brasil
-  { id: 384, broadcasters: ['Paramount+', 'SBT', 'ESPN'] },                  // Libertadores
-  { id: 480, broadcasters: ['Paramount+', 'ESPN'] },                         // Copa Sudamericana
-  { id: 16,  broadcasters: ['TV Globo', 'Sportv', 'CazeTV', 'SBT'] },        // Copa do Mundo
-  { id: 357, broadcasters: ['CazeTV', 'TV Globo', 'Sportv', 'DAZN'] },       // Mundial de Clubes (FIFA)
-  { id: 7,   broadcasters: ['TNT', 'Space', 'SBT'] },                        // Champions League
-  { id: 679, broadcasters: ['ESPN', 'Disney+'] },                            // Europa League
-  { id: 17,  broadcasters: ['ESPN', 'Disney+'] },                            // Premier League
-  { id: 8,   broadcasters: ['ESPN', 'Disney+'] },                            // La Liga
-  { id: 23,  broadcasters: ['CazeTV', 'ESPN'] },                             // Serie A (Itália)
+  { id: 325, name: 'Brasileirão Série A', broadcasters: ['Premiere', 'Sportv', 'TV Globo'] },
+  { id: 390, name: 'Brasileirão Série B', broadcasters: ['Sportv', 'Premiere'] },
+  { id: 373, name: 'Copa do Brasil', broadcasters: ['Premiere', 'Sportv', 'TV Globo'] },
+  { id: 384, name: 'Libertadores', broadcasters: ['Paramount+', 'SBT', 'ESPN'] },
+  { id: 480, name: 'Copa Sul-Americana', broadcasters: ['Paramount+', 'ESPN'] },
+  { id: 16,  name: 'Copa do Mundo', broadcasters: ['TV Globo', 'Sportv', 'CazeTV', 'SBT'] },
+  { id: 357, name: 'Mundial de Clubes', broadcasters: ['CazeTV', 'TV Globo', 'Sportv', 'DAZN'] },
+  { id: 7,   name: 'Champions League', broadcasters: ['TNT', 'Space', 'SBT'] },
+  { id: 679, name: 'Europa League', broadcasters: ['ESPN', 'Disney+'] },
+  { id: 17,  name: 'Premier League', broadcasters: ['ESPN', 'Disney+'] },
+  { id: 8,   name: 'La Liga', broadcasters: ['ESPN', 'Disney+'] },
+  { id: 23,  name: 'Italiano - Série A', broadcasters: ['CazeTV', 'ESPN'] },
 ];
 
 async function getTournamentsCached(env) {
@@ -317,9 +320,12 @@ async function buildTournaments(env) {
       if (startMs < minStart || startMs > horizon) continue;
       const k = `${home}|${away}|${startMs}`;
       if (seen.has(k)) continue; seen.add(k);
+      // Nome canônico (por id) + fase extraída do nome cru (texto após a vírgula).
+      const phase = trn.indexOf(',') >= 0 ? trn.slice(trn.indexOf(',') + 1).trim() : '';
+      const label = t.name + (phase ? `, ${phase}` : '');
       out.push({
         home, away, startMs, stopMs: startMs + 2.5 * 3600 * 1000,
-        tournament: (e.tournament && e.tournament.name) || '', channels: t.broadcasters.slice(),
+        tournament: label, channels: t.broadcasters.slice(),
       });
     }
   }
